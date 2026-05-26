@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         default=BASE_DIR / "data" / "instagram_session.json",
         alias="INSTAGRAM_SESSION_FILE",
     )
+    instagram_cookies_file: Path = Field(
+        default=BASE_DIR / "data" / "cookies.txt",
+        alias="INSTAGRAM_COOKIES_FILE",
+    )
 
     @field_validator("webhook_base_url", "public_base_url", mode="before")
     @classmethod
