@@ -71,7 +71,7 @@ def _build_dispatcher() -> Dispatcher:
         handle_triggers,
         StateFilter(None),
         F.text,
-        ~Command(),
+        ~F.text.startswith("/"),
         ~F.text.regexp(r"(?i)instagram\.com"),
     )
     return dp

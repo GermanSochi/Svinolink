@@ -6,7 +6,7 @@ import os
 import re
 
 from aiogram import Bot, F, Router
-from aiogram.filters import BaseFilter, Command, StateFilter
+from aiogram.filters import BaseFilter, StateFilter
 from aiogram.types import FSInputFile, Message
 
 import ai_quota
@@ -125,7 +125,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 @router.message(
     StateFilter(None),
     F.text,
-    ~Command(),
+    ~F.text.startswith("/"),
     F.chat.type.in_({"group", "supergroup"}),
 )
 async def handle_svin_ai(message: Message, bot: Bot) -> None:
