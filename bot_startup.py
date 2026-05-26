@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 async def configure_bot(bot: Bot) -> None:
     await bot.set_my_commands(
         [
-            BotCommand(command="start", description="как пользоваться"),
-            BotCommand(command="trigger", description="список триггеров в чате"),
-            BotCommand(command="triggers", description="редактировать (Mini App)"),
+            BotCommand(
+                command="triggers",
+                description="Настройка и редактирование триггеров чата",
+            ),
         ]
     )
 

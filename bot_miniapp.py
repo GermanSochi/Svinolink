@@ -23,7 +23,7 @@ def miniapp_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup | None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="⚙️ Тригеры",
+                    text="⚙️ Настроить триггеры",
                     web_app=WebAppInfo(url=url),
                 )
             ]

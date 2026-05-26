@@ -155,11 +155,11 @@
   <div id="toast" class="toast"></div>
   <div id="loader" class="loader">Сек…</div>
   <div id="builtinSection" style="display:none">
-    <div class="section-title">Встроенные (только чтение)</div>
+    <div class="section-title">Системные триггеры (да · 300 · триста · стристо)</div>
     <div id="builtinList"></div>
   </div>
   <div id="customSection" style="display:none">
-    <div class="section-title">Ваши тригеры</div>
+    <div class="section-title">Ваши триггеры · жми ＋</div>
     <div id="customList"></div>
     <div id="emptyCustom" class="empty" style="display:none">Пока пусто. Жми ＋</div>
   </div>
@@ -224,22 +224,28 @@ function newId() {
   return 't-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
 
+const DEFAULT_BUILTIN = [
+  { words: ['да'], response: 'пизда', once_per_day: true, match: 'exact' },
+  { words: ['300', 'триста', 'стристо'], response: 'отсоси у тракториста', once_per_day: false, match: 'exact' },
+];
+
 function renderBuiltin(list) {
   const box = document.getElementById('builtinList');
   box.innerHTML = '';
-  list.forEach(r => {
+  const items = (list && list.length) ? list : DEFAULT_BUILTIN;
+  items.forEach(r => {
     const card = document.createElement('div');
     card.className = 'card builtin';
     const words = (r.words || []).join(', ');
     card.innerHTML = `
-      <div class="card-head"><span class="badge lock">встроенный</span></div>
+      <div class="card-head"><span class="badge lock">системный</span></div>
       <label>Слова</label><input value="${esc(words)}" disabled />
       <label>Ответ</label><textarea disabled>${esc(r.response)}</textarea>
       ${r.once_per_day ? '<div class="row"><span class="badge">1 раз в сутки</span></div>' : ''}
     `;
     box.appendChild(card);
   });
-  document.getElementById('builtinSection').style.display = list.length ? 'block' : 'none';
+  document.getElementById('builtinSection').style.display = 'block';
 }
 
 function esc(s) {
