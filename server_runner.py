@@ -11,6 +11,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from bot_startup import configure_bot
 from config import settings
+from instagram_download import init_instagram_downloader
 from webapp_server import register_miniapp_routes
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         setup_application(app, dp, bot=bot)
 
         async def on_startup(_: web.Application) -> None:
+            init_instagram_downloader()
             hooked = await apply_webhook(bot)
             await configure_bot(bot)
             logger.info("Listening POST %s | Mini App %s", route, settings.miniapp_url or "off")
@@ -75,6 +77,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
     else:
 
         async def on_startup(_: web.Application) -> None:
+            init_instagram_downloader()
             await bot.delete_webhook(drop_pending_updates=True)
             await configure_bot(bot)
             logger.info("Polling mode | Mini App %s", settings.miniapp_url or "off")

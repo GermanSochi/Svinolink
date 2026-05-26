@@ -1,9 +1,14 @@
-"""Обратная совместимость — используйте instagram_urls / instagram_download."""
+"""Обратная совместимость."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from instagram_download import download_instagram_video, remove_file
+from instagram_download import (
+    TELEGRAM_MAX_BYTES,
+    download_instagram_video,
+    init_instagram_downloader,
+    remove_file,
+)
 from instagram_urls import clean_instagram_url, extract_instagram_url, is_instagram_media_url
 
 

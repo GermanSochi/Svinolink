@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 
 from aiogram import Bot, F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import BaseFilter, StateFilter
 from aiogram.types import FSInputFile, Message
 
 from config import settings
 from deps import gpt, store
-from instagram_download import download_instagram_video, remove_file
-from instagram_urls import is_instagram_media_url
 from message_urls import message_has_instagram_link, url_from_message
 from game_store import GameStore
 from riddle_ai import start_riddle_flow, try_solve_riddle
@@ -21,15 +20,23 @@ logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
 
 CAPTION = "Svinolink любит донаты"
+TELEGRAM_MAX_BYTES = 52_428_800
 _WAKE_RE = re.compile(
     r"(?i)(@svinolink_bot|svinolink|свинолинк|свино\s*линк|свин\b|свино\b)"
 )
 
-# Максимально широкий фильтр — любая подстрока instagram.com
-IG_LINK_FILTER = (
-    F.text.contains("instagram.com", ignore_case=True)
-    | F.caption.contains("instagram.com", ignore_case=True)
-)
+
+class InstagramAnyFilter(BaseFilter):
+    """Любое сообщение с instagram.com в тексте, подписи или entity."""
+
+    async def __call__(self, message: Message) -> bool:
+        blob = (message.text or "") + " " + (message.caption or "")
+        if "instagram.com" in blob.lower():
+            return True
+        return message_has_instagram_link(message)
+
+
+IG_LINK_FILTER = InstagramAnyFilter()
 
 game = GameStore()
 
@@ -54,6 +61,8 @@ def is_wake_message(message: Message) -> bool:
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
+    await message.answer("Сек...")
+
     file_path = None
     try:
         text = message.text or message.caption or ""
@@ -65,12 +74,12 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             text[:200],
         )
 
-        await message.answer("Сек...")
+        from instagram_download import download_instagram_video, remove_file
+        from instagram_urls import is_instagram_media_url
 
         clean_url = url_from_message(message)
         if not clean_url:
             raise ValueError("не удалось вытащить ссылку Instagram из сообщения")
-
         if not is_instagram_media_url(clean_url):
             raise ValueError(
                 "нужна ссылка на Reel или пост (/reel/ или /p/), а не просто instagram.com"
@@ -78,6 +87,17 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
         logger.info("IG clean_url=%s", clean_url)
         file_path = await asyncio.to_thread(download_instagram_video, clean_url)
+
+        size = os.path.getsize(file_path)
+        if size > TELEGRAM_MAX_BYTES:
+            remove_file(file_path)
+            file_path = None
+            await message.answer(
+                "❌ Ошибка: Видео весит более 50 МБ. "
+                "Telegram запрещает ботам отправлять такие тяжелые файлы."
+            )
+            return
+
         await message.answer_video(
             video=FSInputFile(file_path),
             caption=CAPTION,
@@ -86,9 +106,18 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         )
     except Exception as e:
         logger.error("instagram handler error: %s", e, exc_info=True)
-        await message.answer(f"❌ Ошибка в коде бота: {str(e)}")
+        err_text = str(e)
+        if not err_text.startswith("❌"):
+            err_text = f"❌ Ошибка в коде бота: {err_text}"
+        await message.answer(err_text)
     finally:
-        remove_file(file_path)
+        if file_path is not None:
+            try:
+                from instagram_download import remove_file
+
+                remove_file(file_path)
+            except Exception:
+                pass
 
 
 @router.message(StateFilter(None), F.text)
