@@ -47,15 +47,32 @@ python main.py
 - `WEBHOOK_PATH` – необязательно; если не задан, берётся токен (секретный путь)
 - `PORT` – порт (хостинг задаёт сам)
 
-### Render (проще всего)
-1. Залейте этот проект в GitHub.
-2. Создайте **Render Web Service** из репозитория.
-3. Выберите **Docker**.
-4. В Environment добавьте:
-   - `BOT_TOKEN`
-   - `WEBHOOK_BASE_URL` = `https://<ваш-сервис>.onrender.com`
+### Render (24/7, ПК можно выключить)
 
-После деплоя бот работает 24/7, даже если ПК выключен.
+**OAuth scopes GitHub вам не нужны** — это для сторонних OAuth-приложений.
+Render при логине через GitHub сам просит доступ к репозиториям (GitHub App).
+Документация про scopes: [Scopes for OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps).
+
+1. Репозиторий: https://github.com/GermanSochi/Svinolink
+2. Render → **New** → **Web Service** → подключить GitHub → выбрать `Svinolink`
+3. **Environment: Docker** (есть `Dockerfile`)
+4. После создания скопируйте URL сервиса, например `https://svinolink-bot.onrender.com`
+5. **Environment** (Settings → Environment):
+
+| Переменная | Значение |
+|------------|----------|
+| `BOT_TOKEN` | токен от @BotFather |
+| `WEBHOOK_BASE_URL` | `https://<имя>.onrender.com` **без** слэша в конце |
+| `YANDEX_API_KEY` | ключ Yandex Cloud (опционально, для `/ai`) |
+| `YANDEX_FOLDER_ID` | `b1g3l4knr91bsq8mqhaq` |
+| `ADMIN_IDS` | ваш Telegram ID (`/myid` в боте) |
+| `PORT` | `8080` (Render часто подставляет сам) |
+
+6. **Manual Deploy** → Deploy latest commit
+
+Проверка: открой в браузере `https://<имя>.onrender.com/health` — должно быть `ok`.
+
+После деплоя бот на webhook; локальный `python main.py` на ПК **останови**, иначе будет конфликт.
 
 ---
 

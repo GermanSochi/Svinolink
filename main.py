@@ -264,6 +264,13 @@ async def _run_webhook(bot: Bot, dp: Dispatcher) -> None:
     webhook_path = f"/{path_secret}"
 
     app = web.Application()
+
+    async def health(_: web.Request) -> web.Response:
+        return web.Response(text="ok")
+
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=webhook_path)
     setup_application(app, dp, bot=bot)
 

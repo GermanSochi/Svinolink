@@ -1,0 +1,20 @@
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: svinolink-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: YANDEX_API_KEY
+        sync: false
+      - key: YANDEX_FOLDER_ID
+        value: b1g3l4knr91bsq8mqhaq
+      - key: ADMIN_IDS
+        sync: false
+      - key: PORT
+        value: "8080"
