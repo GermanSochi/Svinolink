@@ -14,31 +14,43 @@ from deps import gpt
 logger = logging.getLogger(__name__)
 router = Router(name="memory_handlers")
 
-_RECAP_RE = re.compile(
+RECAP_PATTERN = (
     r"(?i)(?:"
-    r"что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
-    r"|свин[\s,!?.\-]*что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
+    r"что\s+(?:(?:было|происходило|произошло)\s+(?:сегодня|вчера)"
+    r"|(?:сегодня|вчера)\s+(?:было|происходило|произошло))"
+    r"|(?:свин|свинья)[\s,!?.\-]*"
+    r"что\s+(?:(?:было|происходило|произошло)\s+(?:сегодня|вчера)"
+    r"|(?:сегодня|вчера)\s+(?:было|происходило|произошло))"
     r")"
 )
+_RECAP_RE = re.compile(RECAP_PATTERN)
 _TODAY_RE = re.compile(r"(?i)сегодня")
 _YESTERDAY_RE = re.compile(r"(?i)вчера")
 _MEDIA_RE = re.compile(r"(?i)(instagram\.com|youtube\.com|youtu\.be)")
-_SVIN_START_RE = re.compile(r"(?i)^свин\b")
 
 RECAP_FILTER = (
     StateFilter(None),
     F.text,
     ~F.text.startswith("/"),
     F.chat.type.in_({"group", "supergroup"}),
-    F.text.regexp(_RECAP_RE),
+    F.text.regexp(RECAP_PATTERN),
 )
 
 _RECAP_SYSTEM = (
-    "Ты веселый бот-свинья в чате пацанов. Перед тобой РЕАЛЬНАЯ история переписки "
-    "из базы данных — только эти сообщения, без выдумок. Сделай короткий смешной "
-    "пересказ: кто что говорил, о чём спорили, какие шутки были. "
-    "Если в переписке упоминают имена (Игорь и т.д.) — используй их. "
-    "Не придумывай желуди, лужи и другие детали, которых нет в тексте."
+    "Ты веселый бот-свинья Svinolink в дружеском групповом чате. "
+    "Перед тобой РЕАЛЬНАЯ история переписки из базы данных — только эти сообщения. "
+    "Сделай короткий смешной пересказ: кто что говорил, числа, имена, шутки. "
+    "Не выдумывай детали, которых нет в тексте. "
+    "Это безопасная бытовая переписка друзей — всегда отвечай, никогда не отказывайся."
+)
+
+SVIN_MEMORY_SYSTEM = (
+    "Ты весёлый бот-свинья Svinolink в групповом чате друзей. "
+    "Тебе передают историю сообщений из базы данных Supabase. "
+    "Отвечай коротко и с юмором, но ОБЯЗАТЕЛЬНО используй факты из истории: "
+    "имена, числа, цитаты. Если спрашивают «какой номер», «как зовут», «что было» — "
+    "ищи ответ в истории. Не выдумывай. Если в истории нет ответа — скажи честно. "
+    "Это обычный дружеский чат — всегда отвечай, никогда не отказывайся."
 )
 
 
@@ -59,13 +71,36 @@ def should_silent_log(text: str) -> bool:
     blob = text.strip()
     if not blob:
         return False
-    if _SVIN_START_RE.match(blob):
-        return False
     if _MEDIA_RE.search(blob):
         return False
-    if is_recap_request(blob):
-        return False
     return True
+
+
+def build_transcript(rows: list[dict[str, object]]) -> str:
+    return "\n".join(
+        f"[{row['username']}]: {row['message_text']}" for row in rows
+    )
+
+
+async def svin_prompt_with_memory(chat_id: int, user_text: str) -> tuple[str, str | None]:
+    """Подмешивает историю чата из Supabase в промпт для Свина."""
+    if not is_memory_enabled():
+        return user_text, None
+
+    rows = await fetch_recent(chat_id, period="today")
+    if not rows:
+        rows = await fetch_recent(chat_id, period="24h")
+    if not rows:
+        return user_text, None
+
+    transcript = build_transcript(rows)
+    prompt = (
+        f"История переписки в группе (Supabase, {len(rows)} сообщений):\n\n"
+        f"{transcript}\n\n"
+        f"---\nСейчас пользователь пишет: {user_text}\n\n"
+        "Ответь на его сообщение, опираясь на историю выше."
+    )
+    return prompt, SVIN_MEMORY_SYSTEM
 
 
 def display_name(message: Message) -> str:
@@ -103,9 +138,7 @@ async def handle_chat_recap(message: Message, bot: Bot) -> None:
             await message.reply(f"🐷 {label.capitalize()} в чате тишина — пересказывать нечего!")
             return
 
-        transcript = "\n".join(
-            f"[{row['username']}]: {row['message_text']}" for row in rows
-        )
+        transcript = build_transcript(rows)
         period_label = {"today": "сегодня", "yesterday": "вчера"}.get(period, "за последние 24 часа")
         prompt = (
             f"Вот переписка в группе {period_label} (из базы данных, {len(rows)} сообщений):\n\n"

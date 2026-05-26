@@ -11,6 +11,7 @@ from aiogram.types import FSInputFile, Message
 import ai_quota
 from config import settings
 from deps import gpt, store
+from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 
 logger = logging.getLogger(__name__)
@@ -25,12 +26,7 @@ SVIN_AI_FILTER = (
     ~F.text.startswith("/"),
     F.chat.type.in_({"group", "supergroup"}),
     ~F.text.regexp(r"(?i)instagram\.com"),
-    ~F.text.regexp(
-        r"(?i)(?:"
-        r"что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
-        r"|свин[\s,!?.\-]*что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
-        r")"
-    ),
+    ~F.text.regexp(RECAP_PATTERN),
     F.text.regexp(r"(?i)(свин|свинья)"),
 )
 
@@ -162,7 +158,8 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             await message.reply(ai_quota.limit_exceeded_message())
             return
 
-        answer = await gpt.reply(message.text)
+        prompt, system = await svin_prompt_with_memory(message.chat.id, message.text)
+        answer = await gpt.reply(prompt, system=system)
         ai_quota.record(uid)
         left = ai_quota.remaining(uid)
         await message.reply(f"{answer}\n\n(Осталось вопросов: {left} в час)")
