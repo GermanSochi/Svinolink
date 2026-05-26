@@ -195,6 +195,17 @@
       cursor: pointer;
       margin-top: 4px;
     }
+    .btn-refresh {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      font: 600 .85rem Outfit, sans-serif;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -212,10 +223,12 @@
   <div id="loader" class="loader">Сек…</div>
   <div id="pickerSection" style="display:none">
     <div class="section-title">Группы, где стоит Svinolink</div>
+    <button type="button" class="btn-refresh" id="btnRefresh">↻ Обновить список</button>
     <div id="pickerList"></div>
     <div class="manual-card" id="manualSection">
-      <div class="section-title" style="margin-top:0">Или вставь ID группы вручную</div>
-      <p>ID приходит в сообщении, когда бота добавляют в чат (строка «🆔 ID группы…»). Число отрицательное, например <code>-1001234567890</code>.</p>
+      <div class="section-title" style="margin-top:0">Как узнать ID группы</div>
+      <p><b>Способ 1:</b> перешли боту в личку любое сообщение из группы «Мы» — он пришлёт ID и добавит группу в список.</p>
+      <p><b>Способ 2:</b> вставь ID вручную (отрицательное число, например <code>-1001234567890</code>).</p>
       <label for="manualChatId">Chat ID группы</label>
       <input id="manualChatId" type="text" inputmode="numeric" placeholder="-1001234567890" autocomplete="off" />
       <button type="button" class="btn-open-id" id="btnManualOpen">Открыть триггеры этой группы</button>
@@ -454,7 +467,7 @@ async function renderPicker(chats, errMsg) {
   if (errMsg) {
     box.innerHTML = `<div class="empty">⚠️ ${esc(errMsg)}</div>`;
   } else if (!chats.length) {
-    box.innerHTML = '<div class="empty">🐷 Список пуст.<br>Добавь бота в группу — или вставь ID вручную ниже.</div>';
+    box.innerHTML = '<div class="empty">🐷 Список пуст.<br><br>1) Перешли боту сообщение из группы в личку<br>2) Жми «Обновить список»<br>3) Или вставь ID вручную ниже</div>';
   } else {
     chats.forEach(c => {
       const btn = document.createElement('button');
@@ -492,6 +505,13 @@ function openChat(id, title) {
   showEditor();
   loadTriggersForChat();
 }
+
+document.getElementById('btnRefresh').onclick = async () => {
+  document.getElementById('loader').style.display = 'block';
+  document.getElementById('loader').textContent = 'Обновляю…';
+  await loadPicker();
+  toast('Список обновлён', true);
+};
 
 document.getElementById('btnBack').onclick = async () => {
   chatId = null;

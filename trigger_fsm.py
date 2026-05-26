@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from aiogram import Bot, Router
-from aiogram.types import ChatMemberUpdated
+from aiogram.types import ChatMemberUpdated, Message
 
 from deps import store
 
@@ -10,8 +10,26 @@ router = Router(name="trigger_fsm")
 GROUP_GREET = "кидай ссылку Instagram — пришлю видео"
 PRIVATE_GREET = (
     "кидай ссылку Instagram — пришлю видео\n\n"
-    "⚙️ Триггеры — кнопка меню ниже: выбери группу и настрой слова."
+    "⚙️ Триггеры — кнопка меню ниже.\n\n"
+    "Чтобы группа появилась в списке: перешли мне любое сообщение "
+    "из группы (в личку) — пришлю ID."
 )
+
+
+@router.message(lambda m: m.chat.type == "private" and m.forward_from_chat is not None)
+async def register_from_forward(message: Message) -> None:
+    src = message.forward_from_chat
+    if not src or src.type not in {"group", "supergroup"}:
+        await message.answer("Перешли сообщение из группы, не из канала или лички.")
+        return
+    store.register_chat(src.id, title=src.title, chat_type=src.type)
+    title = src.title or f"Чат {src.id}"
+    await message.answer(
+        f"🐷 Группа «{title}» добавлена в список.\n\n"
+        f"🆔 ID: `{src.id}`\n\n"
+        "Открой ⚙️ Триггеры → жми «Обновить список».",
+        parse_mode="Markdown",
+    )
 
 
 @router.my_chat_member()

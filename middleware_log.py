@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject, Update
 
+from deps import store
+
 logger = logging.getLogger("svinolink.updates")
 
 
@@ -18,6 +20,12 @@ class LogUpdatesMiddleware(BaseMiddleware):
     ) -> Any:
         if isinstance(event, Update) and event.message:
             m: Message = event.message
+            if m.chat.type in {"group", "supergroup"}:
+                store.register_chat(
+                    m.chat.id,
+                    title=m.chat.title,
+                    chat_type=m.chat.type,
+                )
             text = (m.text or m.caption or "")[:200]
             logger.info(
                 "IN chat_id=%s chat_type=%s user=%s text=%r",
