@@ -32,7 +32,11 @@ async def bot_joined(event: ChatMemberUpdated, bot: Bot) -> None:
             privacy = (
                 "\n\n@BotFather → /setprivacy → Disable — иначе в группе не увижу ссылки."
             )
-            await bot.send_message(cid, GROUP_GREET + privacy)
+            await bot.send_message(
+                cid,
+                f"{GROUP_GREET}{privacy}\n\n🆔 ID группы для настройки триггеров: `{cid}`",
+                parse_mode="Markdown",
+            )
         return
     if new.status in {"left", "kicked"}:
         store.deactivate_chat(cid)

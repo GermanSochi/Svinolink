@@ -176,6 +176,25 @@
       margin-bottom: 12px;
     }
     .author { font-size: .72rem; color: var(--muted); margin-bottom: 8px; }
+    .manual-card {
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px dashed var(--border);
+      background: rgba(0,0,0,.2);
+    }
+    .manual-card p { font-size: .78rem; color: var(--muted); margin-bottom: 10px; line-height: 1.45; }
+    .btn-open-id {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 12px;
+      font: 600 .9rem Outfit, sans-serif;
+      background: linear-gradient(90deg, var(--pink), var(--violet));
+      color: #fff;
+      cursor: pointer;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -194,6 +213,13 @@
   <div id="pickerSection" style="display:none">
     <div class="section-title">Группы, где стоит Svinolink</div>
     <div id="pickerList"></div>
+    <div class="manual-card" id="manualSection">
+      <div class="section-title" style="margin-top:0">Или вставь ID группы вручную</div>
+      <p>ID приходит в сообщении, когда бота добавляют в чат (строка «🆔 ID группы…»). Число отрицательное, например <code>-1001234567890</code>.</p>
+      <label for="manualChatId">Chat ID группы</label>
+      <input id="manualChatId" type="text" inputmode="numeric" placeholder="-1001234567890" autocomplete="off" />
+      <button type="button" class="btn-open-id" id="btnManualOpen">Открыть триггеры этой группы</button>
+    </div>
   </div>
   <div id="builtinSection" style="display:none">
     <div class="section-title">Системные триггеры (да · 300 · триста · стристо)</div>
@@ -223,20 +249,31 @@ let chatId = null;
 function resolveChatId() {
   const sp = new URLSearchParams(location.search);
   const fromUrl = sp.get('chat_id');
-  if (fromUrl && /^-\d+$/.test(fromUrl)) {
-    return parseInt(fromUrl, 10);
+  if (fromUrl && /^-100\d+$/.test(fromUrl.trim())) {
+    return parseInt(fromUrl.trim(), 10);
+  }
+  if (fromUrl && /^-\d+$/.test(fromUrl.trim())) {
+    return parseInt(fromUrl.trim(), 10);
   }
   return null;
 }
 
-function waitInitData(maxMs = 2500) {
+function normalizeGroupId(raw) {
+  const s = String(raw || '').trim().replace(/\s/g, '');
+  if (!/^-\d+$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  if (n >= 0) return null;
+  return n;
+}
+
+function waitInitData(maxMs = 8000) {
   return new Promise((resolve) => {
     if (tg?.initData) return resolve(tg.initData);
     const started = Date.now();
     const tick = () => {
       if (tg?.initData) return resolve(tg.initData);
-      if (Date.now() - started >= maxMs) return resolve('');
-      setTimeout(tick, 50);
+      if (Date.now() - started >= maxMs) return resolve(tg?.initData || '');
+      setTimeout(tick, 80);
     };
     tick();
   });
@@ -392,18 +429,32 @@ function showEditor() {
 async function loadPicker() {
   document.getElementById('pageTitle').textContent = 'Триггеры';
   document.getElementById('btnBack').style.display = 'none';
-  const r = await fetch('/api/chats', { headers: apiHeaders() });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || 'нет доступа');
-  await renderPicker(j.chats || []);
+  document.getElementById('pickerSection').style.display = 'block';
+  hideEditor();
+  let chats = [];
+  let errMsg = '';
+  try {
+    if (!tg?.initData) {
+      errMsg = 'нет авторизации Telegram — вставь ID группы вручную ниже';
+    } else {
+      const r = await fetch('/api/chats', { headers: apiHeaders() });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'не удалось загрузить список');
+      chats = j.chats || [];
+    }
+  } catch (e) {
+    errMsg = e.message || 'список групп недоступен';
+  }
+  await renderPicker(chats, errMsg);
 }
 
-async function renderPicker(chats) {
-  hideEditor();
+async function renderPicker(chats, errMsg) {
   const box = document.getElementById('pickerList');
   box.innerHTML = '';
-  if (!chats.length) {
-    box.innerHTML = '<div class="empty">🐷 Пока нет групп.<br>Добавь бота в чат — он появится здесь.</div>';
+  if (errMsg) {
+    box.innerHTML = `<div class="empty">⚠️ ${esc(errMsg)}</div>`;
+  } else if (!chats.length) {
+    box.innerHTML = '<div class="empty">🐷 Список пуст.<br>Добавь бота в группу — или вставь ID вручную ниже.</div>';
   } else {
     chats.forEach(c => {
       const btn = document.createElement('button');
@@ -411,10 +462,10 @@ async function renderPicker(chats) {
       btn.className = 'pick-btn';
       const title = c.title || ('Чат ' + c.chat_id);
       const builtin = c.builtin_count ?? 2;
-      const customN = c.custom_count ?? (c.custom || []).length ?? 0;
+      const customN = c.custom_count ?? 0;
       btn.innerHTML = `
         <strong>💬 ${esc(title)}</strong>
-        <small>Нажми, чтобы настроить триггеры для всех в чате</small>
+        <small>ID: ${c.chat_id}</small>
         <div class="pick-meta">
           <span>системных: ${builtin}</span>
           <span>своих: ${customN}</span>
@@ -425,7 +476,9 @@ async function renderPicker(chats) {
   }
   document.getElementById('pickerSection').style.display = 'block';
   document.getElementById('loader').style.display = 'none';
-  document.getElementById('chatHint').textContent = `${chats.length} групп · выбери чат`;
+  document.getElementById('chatHint').textContent = chats.length
+    ? `${chats.length} групп · выбери или вставь ID`
+    : 'выбери группу или вставь ID';
 }
 
 function openChat(id, title) {
@@ -447,41 +500,50 @@ document.getElementById('btnBack').onclick = async () => {
   history.replaceState({}, '', url);
   document.getElementById('loader').style.display = 'block';
   document.getElementById('loader').textContent = 'Сек…';
-  try {
-    await loadPicker();
-  } catch (e) {
-    document.getElementById('loader').textContent = e.message || 'ошибка';
+  await loadPicker();
+};
+
+document.getElementById('btnManualOpen').onclick = () => {
+  const id = normalizeGroupId(document.getElementById('manualChatId').value);
+  if (id == null) {
+    toast('Вставь ID группы: отрицательное число, например -1001234567890', false);
+    return;
   }
+  openChat(id, 'Чат ' + id);
 };
 
 async function loadTriggersForChat() {
   const loader = document.getElementById('loader');
   loader.style.display = 'block';
   loader.textContent = 'Сек…';
-  const q = `?chat_id=${chatId}`;
-  const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || 'нет доступа');
-  chatId = j.chat_id;
-  document.getElementById('chatHint').textContent = (j.title || ('Чат ' + chatId)) + ' · для всех в чате';
-  document.getElementById('pageTitle').textContent = j.title || ('Чат ' + chatId);
-  renderBuiltin(j.builtin || []);
-  custom = j.custom || [];
-  renderCustom();
-  loader.style.display = 'none';
+  try {
+    const q = `?chat_id=${chatId}`;
+    const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'нет доступа');
+    chatId = j.chat_id;
+    document.getElementById('chatHint').textContent = (j.title || ('Чат ' + chatId)) + ' · для всех в чате';
+    document.getElementById('pageTitle').textContent = j.title || ('Чат ' + chatId);
+    renderBuiltin(j.builtin || []);
+    custom = j.custom || [];
+    renderCustom();
+    loader.style.display = 'none';
+  } catch (e) {
+    hideEditor();
+    loader.style.display = 'none';
+    document.getElementById('pickerSection').style.display = 'block';
+    toast(e.message || 'ошибка', false);
+    await renderPicker([], e.message || 'не удалось открыть чат');
+  }
 }
 
 async function load() {
   const loader = document.getElementById('loader');
   try {
     await waitInitData();
-    if (!tg?.initData) {
-      throw new Error('нет initData — открой Mini App из Telegram');
-    }
-
     chatId = resolveChatId();
     if (chatId == null) {
-      document.getElementById('chatHint').textContent = 'Загрузка групп…';
+      document.getElementById('chatHint').textContent = 'Загрузка…';
       await loadPicker();
       return;
     }
@@ -489,12 +551,13 @@ async function load() {
     document.getElementById('pageTitle').textContent = 'Чат ' + chatId;
     document.getElementById('btnBack').style.display = 'inline-block';
     document.getElementById('chatHint').textContent = 'загрузка…';
+    document.getElementById('pickerSection').style.display = 'none';
     showEditor();
     await loadTriggersForChat();
   } catch (e) {
-    loader.style.display = 'block';
-    loader.textContent = e.message || 'ошибка загрузки';
-    document.getElementById('chatHint').textContent = e.message || 'ошибка';
+    loader.style.display = 'none';
+    document.getElementById('chatHint').textContent = 'выбери группу или вставь ID';
+    await renderPicker([], e.message || 'ошибка загрузки');
   }
 }
 

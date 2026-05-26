@@ -71,7 +71,11 @@ def _merge_authorship(
 
 async def miniapp_index(_: web.Request) -> web.Response:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 async def api_get_triggers(request: web.Request) -> web.Response:
@@ -81,7 +85,13 @@ async def api_get_triggers(request: web.Request) -> web.Response:
         fallback = None
         if fb is not None and str(fb).lstrip("-").isdigit():
             fallback = int(fb)
+            if fallback >= 0:
+                raise ValueError(
+                    "нужен ID группы (отрицательное число, например -1001234567890)"
+                )
         session = parse_init_data(init_raw, fallback_chat_id=fallback)
+        if not store.get_chat_title(session.chat_id):
+            store.register_chat(session.chat_id, title=f"Чат {session.chat_id}")
         defaults = store.load_defaults()
         custom = store.load_custom(session.chat_id)
         return web.json_response(
@@ -146,8 +156,16 @@ async def api_save_triggers(request: web.Request) -> web.Response:
         init_raw = _init_data_from_request(request)
         body = await request.json()
         fb = body.get("chat_id")
-        fallback = int(fb) if fb is not None else None
+        if fb is None:
+            raise ValueError("не указан chat_id группы")
+        fallback = int(fb)
+        if fallback >= 0:
+            raise ValueError(
+                "нужен ID группы (отрицательное число, например -1001234567890)"
+            )
         session = parse_init_data(init_raw, fallback_chat_id=fallback)
+        if not store.get_chat_title(session.chat_id):
+            store.register_chat(session.chat_id, title=f"Чат {session.chat_id}")
         items = body.get("triggers") or body.get("custom") or []
         if not isinstance(items, list):
             raise ValueError("неверный формат")

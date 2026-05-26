@@ -39,8 +39,12 @@ def parse_init_data(init_data: str, *, fallback_chat_id: int | None = None) -> W
     # URL ?chat_id= из группы — приоритетнее parsed.chat (иначе грузится не тот чат)
     chat_id: int | None = None
     if fallback_chat_id is not None:
+        if fallback_chat_id >= 0:
+            raise ValueError(
+                "нужен ID группы (отрицательное число, например -1001234567890)"
+            )
         chat_id = fallback_chat_id
-    elif parsed.chat:
+    elif parsed.chat and parsed.chat.type in {"group", "supergroup"}:
         chat_id = parsed.chat.id
     elif parsed.start_param:
         raw = parsed.start_param.strip()
@@ -48,7 +52,7 @@ def parse_init_data(init_data: str, *, fallback_chat_id: int | None = None) -> W
             chat_id = int(raw[5:])
 
     if chat_id is None:
-        raise ValueError("выбери группу в Mini App из лички бота")
+        raise ValueError("выбери группу из списка или вставь ID группы вручную")
 
     return WebAppSession(
         user_id=parsed.user.id,
