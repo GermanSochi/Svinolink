@@ -63,7 +63,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
         await send_private_triggers_menu(message)
         return
     kb = miniapp_keyboard(message.chat.id) if settings.miniapp_url else None
-    short = GROUP_GREET.split("\n\n@BotFather")[0]
+    short = GROUP_GREET
     await bot.send_message(message.chat.id, short, reply_markup=kb)
 
 

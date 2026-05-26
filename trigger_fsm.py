@@ -12,14 +12,8 @@ from deps import store
 
 router = Router(name="trigger_fsm")
 
-GROUP_GREET = (
-    "кидай ссылку Instagram Reel или пост — пришлю видео\n"
-    "/triggers — настройка триггеров"
-)
-PRIVATE_GREET = (
-    "кидай ссылку Instagram Reel или пост — пришлю видео\n\n"
-    "/triggers — группы и триггеры"
-)
+GROUP_GREET = "кидай ссылку Instagram — пришлю видео"
+PRIVATE_GREET = "кидай ссылку Instagram — пришлю видео"
 
 
 def _remember_chat(message: Message) -> None:
