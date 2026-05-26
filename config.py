@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     admin_ids_raw: str = Field(default="", alias="ADMIN_IDS")
+    admin_usernames_raw: str = Field(default="gersochi", alias="ADMIN_USERNAMES")
 
     yandex_api_key: str = Field(default="", alias="YANDEX_API_KEY")
     yandex_folder_id: str = Field(default="b1g3l4knr91bsq8mqhaq", alias="YANDEX_FOLDER_ID")
@@ -38,6 +39,14 @@ class Settings(BaseSettings):
             if part.isdigit():
                 out.add(int(part))
         return out
+
+    @property
+    def admin_usernames(self) -> set[str]:
+        return {
+            x.strip().lower().lstrip("@")
+            for x in self.admin_usernames_raw.split(",")
+            if x.strip()
+        }
 
 
 settings = Settings()

@@ -2,102 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import tempfile
 from contextlib import suppress
-from pathlib import Path
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import FSInputFile, Message
+from aiogram.types import Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from yt_dlp import YoutubeDL
 
+from admin_panel import router as admin_router
+from chat_handlers import router as chat_router
 from config import settings
 from deps import gpt, store
 from trigger_fsm import PRIVATE_GREET, router as trigger_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("svinolink")
-
-CAPTION = "Svinolink любит донаты"
-
-_IG_RE = re.compile(
-    r"https?://(?:www\.)?instagram\.com/(?:reel|p)/[A-Za-z0-9_-]+",
-    re.IGNORECASE,
-)
-_YT_SHORTS_RE = re.compile(
-    r"https?://(?:www\.)?(?:m\.)?youtube\.com/shorts/[A-Za-z0-9_-]+",
-    re.IGNORECASE,
-)
-
-
-def _extract_supported_url(text: str) -> str | None:
-    for m in re.finditer(r"https?://\S+", text):
-        url = m.group(0).strip("()[]<>.,!?:;\"'")
-        if _IG_RE.search(url) or _YT_SHORTS_RE.search(url):
-            return url
-    return None
-
-
-def _download_to_temp_mp4(url: str) -> Path:
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    tmp_path = Path(tmp.name)
-    tmp.close()
-
-    ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "outtmpl": str(tmp_path.with_suffix(".%(ext)s")),
-        "noplaylist": True,
-    }
-
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        downloaded = ydl.prepare_filename(info)
-        final_path = Path(downloaded)
-
-    if final_path.suffix.lower() != ".mp4":
-        merged = final_path.with_suffix(".mp4")
-        if merged.is_file():
-            final_path = merged
-        elif tmp_path.with_suffix(".mp4").is_file():
-            final_path = tmp_path.with_suffix(".mp4")
-
-    return final_path if final_path.is_file() else tmp_path
-
-
-async def handle_link(message: Message, bot: Bot) -> None:
-    if not message.text or not message.from_user:
-        return
-    url = _extract_supported_url(message.text)
-    if not url:
-        return
-
-    file_path: Path | None = None
-    try:
-        file_path = await asyncio.to_thread(_download_to_temp_mp4, url)
-        if not file_path or not file_path.exists():
-            return
-        await bot.send_video(
-            chat_id=message.chat.id,
-            video=FSInputFile(file_path),
-            caption=CAPTION,
-            reply_to_message_id=message.message_id,
-            supports_streaming=True,
-        )
-    except Exception as exc:
-        logger.warning("download failed: %s", exc)
-    finally:
-        if file_path:
-            with suppress(Exception):
-                file_path.unlink(missing_ok=True)
-                for p in file_path.parent.glob(f"{file_path.stem}*"):
-                    if p.is_file():
-                        p.unlink(missing_ok=True)
 
 
 async def handle_triggers(message: Message, bot: Bot) -> None:
@@ -136,12 +57,12 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(admin_router)
     dp.include_router(trigger_router)
+    dp.include_router(chat_router)
 
     dp.message.register(cmd_start, CommandStart())
-    # FSM и команды тригеров — в trigger_router (раньше общего текста)
     dp.message.register(handle_triggers, StateFilter(None), F.text)
-    dp.message.register(handle_link, StateFilter(None), F.text)
     return dp
 
 
