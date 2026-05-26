@@ -19,7 +19,7 @@ async def cmd_admin(message: Message) -> None:
   await message.answer(
     "Панель GERSOCHI\n\n"
     "/admin_stats — статистика\n"
-    "/admin_reset USER_ID — сброс загадки игрока\n"
+    "/admin_reset USER_ID — сброс ИИ-лимита «свин»\n"
     "/admin_broadcast текст — только в личку тебе (тест)"
   )
 
