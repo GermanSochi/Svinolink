@@ -20,5 +20,7 @@ services:
         value: b1g3l4knr91bsq8mqhaq
       - key: ADMIN_IDS
         sync: false
+      - key: INSTAGRAM_COOKIES_FILE
+        sync: false
       - key: PORT
         value: "8080"

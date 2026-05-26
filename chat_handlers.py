@@ -11,7 +11,7 @@ from aiogram.types import FSInputFile, Message
 from config import settings
 from deps import gpt, store
 from downloader import cleanup_paths, download_to_temp_mp4
-from message_urls import message_has_link_hint, url_from_message
+from message_urls import message_has_instagram_link, url_from_message
 from game_store import GameStore
 from riddle_ai import start_riddle_flow, try_solve_riddle
 from yandex_gpt import YandexGPTError
@@ -24,11 +24,10 @@ _WAKE_RE = re.compile(
     r"(?i)(@svinolink_bot|svinolink|свинолинк|свино\s*линк|свин\b|свино\b)"
 )
 
-class SocialLinkFilter(BaseFilter):
-    """instagram.com / youtube.com / youtu.be в тексте, подписи или entity."""
 
+class InstagramLinkFilter(BaseFilter):
     async def __call__(self, message: Message) -> bool:
-        return message_has_link_hint(message)
+        return message_has_instagram_link(message)
 
 
 game = GameStore()
@@ -53,27 +52,26 @@ def is_wake_message(message: Message) -> bool:
     return False
 
 
-@router.message(StateFilter(None), SocialLinkFilter())
-async def handle_social_links(message: Message, bot: Bot) -> None:
+@router.message(StateFilter(None), InstagramLinkFilter())
+async def handle_instagram_link(message: Message, bot: Bot) -> None:
     text = message.text or message.caption or ""
     logger.info(
-        "handle_social_links chat=%s type=%s text=%r hint=%s",
+        "instagram_handler chat=%s type=%s text=%r",
         message.chat.id,
         message.chat.type,
         text[:200],
-        message_has_link_hint(message),
     )
 
     await message.answer("Сек...")
 
     url = url_from_message(message)
     if not url:
-        err = "не удалось вытащить ссылку из сообщения"
-        logger.error(err + " text=%r", text[:300])
+        err = "не удалось вытащить ссылку Instagram"
+        logger.error("%s text=%r", err, text[:300])
         await message.answer(f"Ошибка при обработке ссылки: {err}")
         return
 
-    logger.info("LINK url=%s", url[:120])
+    logger.info("IG url=%s", url[:160])
     file_path = None
     try:
         file_path = await asyncio.to_thread(download_to_temp_mp4, url)
@@ -85,7 +83,7 @@ async def handle_social_links(message: Message, bot: Bot) -> None:
             supports_streaming=True,
         )
     except Exception as e:
-        logger.error("download/send failed url=%s: %s", url, e, exc_info=True)
+        logger.error("instagram download failed url=%s: %s", url, e, exc_info=True)
         await message.answer(f"Ошибка при обработке ссылки: {str(e)}")
     finally:
         if file_path:
@@ -94,7 +92,7 @@ async def handle_social_links(message: Message, bot: Bot) -> None:
 
 @router.message(StateFilter(None), F.text)
 async def handle_wake(message: Message, bot: Bot) -> None:
-    if message_has_link_hint(message):
+    if message_has_instagram_link(message):
         return
     if not is_wake_message(message):
         return
@@ -107,8 +105,7 @@ async def handle_wake(message: Message, bot: Bot) -> None:
         await message.reply(text)
     except YandexGPTError:
         await message.reply(
-            "На связи Svinolink. Кидаю ссылки Instagram/YouTube в видео. "
-            "Загадка временно недоступна — кидай ссылку."
+            "На связи Svinolink. Кидай ссылку на Instagram Reel — пришлю видео."
         )
 
 
@@ -118,7 +115,7 @@ async def handle_riddle_answer(message: Message, bot: Bot) -> None:
         return
     if message.text.startswith("/"):
         return
-    if message_has_link_hint(message):
+    if message_has_instagram_link(message):
         return
     if is_wake_message(message):
         return
@@ -135,7 +132,7 @@ async def handle_riddle_answer(message: Message, bot: Bot) -> None:
         message.text, store.load_triggers(cid)
     ):
         if game.questions_left(cid, uid) <= 0:
-            await message.reply("Лимит: 2 вопроса в час. Потом снова или кидай ссылки.")
+            await message.reply("Лимит: 2 вопроса в час. Потом снова или кидай Reels.")
             return
         try:
             answer = await gpt.reply(
@@ -149,4 +146,4 @@ async def handle_riddle_answer(message: Message, bot: Bot) -> None:
             left = game.questions_left(cid, uid)
             await message.reply(f"{answer}\n\n(осталось {left}/2 вопроса в час)")
         except YandexGPTError:
-            await message.reply("Сейчас не могу ответить. Кидай ссылку — видео скину.")
+            await message.reply("Сейчас не могу ответить. Кидай Reels — видео скину.")

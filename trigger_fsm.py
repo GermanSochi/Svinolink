@@ -16,10 +16,10 @@ from trigger_ai import parse_choice, parse_manage_command, suggest_trigger_repli
 router = Router(name="trigger_fsm")
 
 GROUP_GREET = (
-    "кидай ссылку Instagram (reel/пост) или YouTube Shorts — пришлю видео\n"
+    "кидай ссылку Instagram Reel или пост — пришлю видео\n"
     "⚙️ /triggers — настройка триггеров"
 )
-PRIVATE_GREET = "кидай ссылку Instagram/YouTube — пришлю видео"
+PRIVATE_GREET = "кидай ссылку Instagram Reel или пост — пришлю видео"
 
 
 class SetupTrigger(StatesGroup):

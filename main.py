@@ -77,7 +77,7 @@ def _build_dispatcher() -> Dispatcher:
         handle_triggers,
         StateFilter(None),
         F.text,
-        ~F.text.regexp(r"(?i)(instagram\.com|youtube\.com|youtu\.be)"),
+        ~F.text.regexp(r"(?i)instagram\.com"),
     )
     return dp
 

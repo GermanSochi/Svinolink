@@ -7,7 +7,7 @@ from game_store import GameStore
 from yandex_gpt import YandexGPTError
 
 _INTRO = (
-    "На связи Svinolink. Моя работа — перегонять ссылки Instagram и YouTube Shorts в видео.\n"
+    "На связи Svinolink. Моя работа — перегонять ссылки Instagram Reels в видео.\n"
     "Со мной можно поговорить, но сначала угадай загадку:"
 )
 

@@ -7,23 +7,14 @@ from pathlib import Path
 
 from yt_dlp import YoutubeDL
 
-# Любая ссылка с этими доменами (в т.ч. с ?query и хвостовой пунктуацией)
+# Instagram: reel, reels, пост /p/, TV, share
 _URL_TAIL = r"[^\s\]\)\"\'<>]+"
 _IG_URL = re.compile(
     rf"https?://(?:www\.)?instagram\.com/{_URL_TAIL}",
     re.IGNORECASE,
 )
-_YT_URL = re.compile(
-    rf"https?://(?:www\.)?(?:m\.)?(?:youtube\.com/{_URL_TAIL}|youtu\.be/{_URL_TAIL})",
-    re.IGNORECASE,
-)
-# Без схемы: instagram.com/reel/...
 _IG_LOOSE = re.compile(
     rf"(?:https?://)?(?:www\.)?instagram\.com/{_URL_TAIL}",
-    re.IGNORECASE,
-)
-_YT_LOOSE = re.compile(
-    rf"(?:https?://)?(?:www\.)?(?:m\.)?(?:youtube\.com/{_URL_TAIL}|youtu\.be/{_URL_TAIL})",
     re.IGNORECASE,
 )
 
@@ -39,62 +30,69 @@ def _normalize_loose(url: str) -> str:
     return u
 
 
-def _is_supported(url: str) -> bool:
+def _is_instagram_url(url: str) -> bool:
     u = url.lower()
-    if "instagram.com" in u:
-        return any(x in u for x in ("/reel", "/reels", "/p/", "/tv/", "/share/"))
-    if "youtube.com" in u:
-        return "/shorts/" in u or "/shorts?" in u or "watch" in u
-    if "youtu.be/" in u:
-        return True
-    return False
+    if "instagram.com" not in u:
+        return False
+    return any(x in u for x in ("/reel", "/reels", "/p/", "/tv/", "/share/"))
 
 
-def extract_supported_url(text: str) -> str | None:
+def extract_instagram_url(text: str) -> str | None:
     if not text:
         return None
 
-    for pattern in (_IG_URL, _YT_URL, _IG_LOOSE, _YT_LOOSE):
+    for pattern in (_IG_URL, _IG_LOOSE):
         m = pattern.search(text)
         if m:
             candidate = _normalize_loose(m.group(0))
-            if _is_supported(candidate):
+            if _is_instagram_url(candidate):
                 return candidate
 
     for m in re.finditer(r"https?://\S+", text):
         raw = _clean_url(m.group(0))
-        if _is_supported(raw):
+        if _is_instagram_url(raw):
             return raw
     return None
 
 
+def _cookies_path() -> str | None:
+    for key in ("INSTAGRAM_COOKIES_FILE", "COOKIES_FILE"):
+        path = os.environ.get(key, "").strip()
+        if path and Path(path).is_file():
+            return path
+    default = Path(__file__).resolve().parent / "data" / "cookies.txt"
+    if default.is_file():
+        return str(default)
+    return None
+
+
 def download_to_temp_mp4(url: str) -> Path:
+    if not _is_instagram_url(url):
+        raise ValueError("только ссылки Instagram (reel / пост)")
+
     tmp_dir = tempfile.mkdtemp(prefix="svinolink_")
     out = Path(tmp_dir) / "video.%(ext)s"
 
     ydl_opts: dict = {
-        "format": (
-            "best[ext=mp4][filesize<48M]/"
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-            "best[ext=mp4]/best"
-        ),
-        "merge_output_format": "mp4",
+        # Один mp4 без merge — работает и без ffmpeg
+        "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "outtmpl": str(out),
-        "socket_timeout": 45,
+        "socket_timeout": 60,
         "retries": 3,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            )
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
         },
     }
 
-    cookies = os.environ.get("INSTAGRAM_COOKIES_FILE", "").strip()
-    if cookies and Path(cookies).is_file():
+    cookies = _cookies_path()
+    if cookies:
         ydl_opts["cookiefile"] = cookies
 
     with YoutubeDL(ydl_opts) as ydl:
@@ -104,6 +102,9 @@ def download_to_temp_mp4(url: str) -> Path:
     if not path.is_file():
         for p in Path(tmp_dir).glob("*.mp4"):
             return p
+        for p in Path(tmp_dir).glob("*.*"):
+            if p.suffix.lower() in {".mp4", ".mov", ".webm"}:
+                return p
         raise FileNotFoundError("файл не скачался")
 
     size_mb = path.stat().st_size / (1024 * 1024)
