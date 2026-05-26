@@ -179,6 +179,34 @@ tg?.setBackgroundColor?.('#0a0614');
 let custom = [];
 let chatId = null;
 
+function resolveChatId() {
+  const sp = new URLSearchParams(location.search);
+  const fromUrl = sp.get('chat_id');
+  if (fromUrl && /^-?\d+$/.test(fromUrl)) {
+    return parseInt(fromUrl, 10);
+  }
+  const unsafe = tg?.initDataUnsafe;
+  if (unsafe?.chat?.id) return unsafe.chat.id;
+  if (unsafe?.start_param?.startsWith('chat_')) {
+    const raw = unsafe.start_param.slice(5);
+    if (/^-?\d+$/.test(raw)) return parseInt(raw, 10);
+  }
+  return null;
+}
+
+function waitInitData(maxMs = 2500) {
+  return new Promise((resolve) => {
+    if (tg?.initData) return resolve(tg.initData);
+    const started = Date.now();
+    const tick = () => {
+      if (tg?.initData) return resolve(tg.initData);
+      if (Date.now() - started >= maxMs) return resolve('');
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
 function toast(msg, ok) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -301,8 +329,20 @@ document.getElementById('btnSave').onclick = async () => {
 };
 
 async function load() {
+  const loader = document.getElementById('loader');
   try {
-    const q = chatId ? `?chat_id=${chatId}` : '';
+    chatId = resolveChatId();
+    if (chatId == null) {
+      throw new Error('нет chat_id — открой /triggers в групповом чате');
+    }
+    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · загрузка…';
+
+    await waitInitData();
+    if (!tg?.initData) {
+      throw new Error('нет initData — открой Mini App из Telegram');
+    }
+
+    const q = `?chat_id=${chatId}`;
     const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'нет доступа');
@@ -311,14 +351,14 @@ async function load() {
     renderBuiltin(j.builtin || []);
     custom = j.custom || [];
     renderCustom();
-    document.getElementById('loader').style.display = 'none';
+    loader.style.display = 'none';
   } catch (e) {
-    document.getElementById('loader').textContent = e.message;
+    loader.textContent = e.message || 'ошибка загрузки';
+    document.getElementById('chatHint').textContent = e.message || 'ошибка';
   }
 }
 
-const sp = new URLSearchParams(location.search);
-if (sp.get('chat_id')) chatId = parseInt(sp.get('chat_id'), 10);
+chatId = resolveChatId();
 load();
 </script>
 </body>

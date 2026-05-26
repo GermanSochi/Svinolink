@@ -6,12 +6,19 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MenuButton
 from config import settings
 
 
-def miniapp_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup | None:
-    url = settings.miniapp_url
-    if not url:
+def miniapp_url_for_chat(chat_id: int | None = None) -> str | None:
+    base = settings.miniapp_url
+    if not base:
         return None
     if chat_id is not None:
-        url = f"{url}?chat_id={chat_id}"
+        return f"{base}?chat_id={chat_id}"
+    return base
+
+
+def miniapp_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup | None:
+    url = miniapp_url_for_chat(chat_id)
+    if not url:
+        return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [

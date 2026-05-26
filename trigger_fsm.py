@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ChatMemberUpdated, Message
 
-from bot_miniapp import miniapp_keyboard
+from bot_miniapp import miniapp_keyboard, miniapp_url_for_chat
 from config import settings
 from deps import gpt, store
 from trigger_ai import parse_choice, parse_manage_command, suggest_trigger_replies
@@ -17,7 +17,7 @@ router = Router(name="trigger_fsm")
 
 GROUP_GREET = (
     "кидай ссылку Instagram Reel или пост — пришлю видео\n"
-    "⚙️ /triggers — настройка триггеров"
+    "/trigger — список триггеров · /triggers — редактировать"
 )
 PRIVATE_GREET = "кидай ссылку Instagram Reel или пост — пришлю видео"
 
@@ -29,6 +29,20 @@ class SetupTrigger(StatesGroup):
 
 def _chat_id(message: Message) -> int:
     return message.chat.id
+
+
+def format_active_triggers(chat_id: int) -> str:
+    rules = store.load_triggers(chat_id)
+    if not rules:
+        return "Активные триггеры в этом чате: пока пусто"
+    words: list[str] = []
+    seen: set[str] = set()
+    for rule in rules:
+        for w in rule.words:
+            if w not in seen:
+                seen.add(w)
+                words.append(w)
+    return f"Активные триггеры в этом чате: {', '.join(words)}"
 
 
 @router.my_chat_member()
@@ -48,18 +62,26 @@ async def bot_joined(event: ChatMemberUpdated, bot: Bot) -> None:
 
 
 @router.message(Command("trigger"))
-async def cmd_trigger_start(message: Message, state: FSMContext) -> None:
+async def cmd_trigger_list(message: Message, state: FSMContext) -> None:
+    """Только текстовый список — без Mini App."""
     await state.clear()
-    if message.chat.type in {"group", "supergroup"} and settings.miniapp_url:
-        kb = miniapp_keyboard(message.chat.id)
-        await message.answer(
-            "Быстрее через Mini App — все тригеры сразу.\n"
-            "Или ответь сюда одним словом:",
-            reply_markup=kb,
-        )
-    await state.set_state(SetupTrigger.word)
-    if message.chat.type not in {"group", "supergroup"}:
-        await message.answer("На какое слово ловить? (одно слово, точное совпадение)")
+    await message.answer(format_active_triggers(_chat_id(message)))
+
+
+@router.message(Command("triggers"))
+async def cmd_triggers_miniapp(message: Message) -> None:
+    """Mini App с chat_id текущего чата."""
+    cid = _chat_id(message)
+    url = miniapp_url_for_chat(cid)
+    if not url:
+        await message.answer("Mini App недоступен: задай WEBHOOK_BASE_URL на Render.")
+        return
+    kb = miniapp_keyboard(cid)
+    await message.answer(
+        "⚙️ Редактирование триггеров — откроется Mini App.\n"
+        f"Чат: {cid}",
+        reply_markup=kb,
+    )
 
 
 @router.message(StateFilter(SetupTrigger.word), F.text)
@@ -106,27 +128,6 @@ async def setup_pick(message: Message, state: FSMContext) -> None:
     await state.clear()
 
 
-@router.message(Command("triggers"))
-async def cmd_list_triggers(message: Message) -> None:
-    cid = _chat_id(message)
-    lines = store.all_numbered_for_display(cid)
-    kb = None
-    if message.chat.type in {"group", "supergroup"}:
-        kb = miniapp_keyboard(cid)
-    if not lines:
-        await message.answer(
-            "Пока только встроенные. /trigger — добавить свой.",
-            reply_markup=kb,
-        )
-        return
-    tail = (
-        "\n\nУдалить: <code>3 удалить</code> или <code>1 2 удалить</code>\n"
-        "Изменить: <code>5 отредактировать</code>\n"
-        "Или ⚙️ Тригеры — полное редактирование в Mini App"
-    )
-    await message.answer("\n".join(lines) + tail, parse_mode="HTML", reply_markup=kb)
-
-
 @router.message(F.text.regexp(r"(?i).*(\d+).*(удал|отредакт|редакт|edit)"))
 async def cmd_manage_inline(message: Message, state: FSMContext) -> None:
     if await state.get_state():
@@ -138,7 +139,7 @@ async def cmd_manage_inline(message: Message, state: FSMContext) -> None:
     cid = _chat_id(message)
     custom = store.load_custom(cid)
     if not custom:
-        await message.answer("Нет своих тригеров. /trigger — добавить.")
+        await message.answer("Нет своих тригеров. /triggers — добавить в Mini App.")
         return
 
     deletes = [idx for action, idx in parsed if action == "delete"]
@@ -163,4 +164,3 @@ async def cmd_manage_inline(message: Message, state: FSMContext) -> None:
             f"Редактируем №{one_based}. Новое слово? (сейчас: {rule.words[0]})\n"
             "Напиши слово или «=» чтобы оставить."
         )
-

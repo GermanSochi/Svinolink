@@ -58,7 +58,9 @@ async def api_get_triggers(request: web.Request) -> web.Response:
     try:
         init_raw = _init_data_from_request(request)
         fb = request.query.get("chat_id")
-        fallback = int(fb) if fb and str(fb).lstrip("-").isdigit() else None
+        fallback = None
+        if fb is not None and str(fb).lstrip("-").isdigit():
+            fallback = int(fb)
         session = parse_init_data(init_raw, fallback_chat_id=fallback)
         defaults = store.load_defaults()
         custom = store.load_custom(session.chat_id)

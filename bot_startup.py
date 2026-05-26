@@ -14,8 +14,8 @@ async def configure_bot(bot: Bot) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="как пользоваться"),
-            BotCommand(command="trigger", description="добавить триггер"),
-            BotCommand(command="triggers", description="список триггеров"),
+            BotCommand(command="trigger", description="список триггеров в чате"),
+            BotCommand(command="triggers", description="редактировать (Mini App)"),
         ]
     )
 
