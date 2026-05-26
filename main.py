@@ -74,7 +74,6 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
     dp.include_router(trigger_router)
     dp.include_router(chat_router)
-    dp.include_router(memory_router)
     dp.include_router(admin_router)
 
     dp.message.register(cmd_start, CommandStart(), F.chat.type == "private")
