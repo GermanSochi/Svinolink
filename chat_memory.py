@@ -35,9 +35,11 @@ def normalize_database_url(raw: str) -> str:
     if not raw:
         return raw
     parsed = urlparse(raw)
-    if not parsed.scheme.startswith("postgres") or not parsed.username:
+    if not parsed.scheme.startswith("postgres") or not parsed.username or not parsed.password:
         return raw
-    password = unquote(parsed.password or "", encoding="utf-8", errors="replace")
+    if parsed.port is None and parsed.hostname and ":" in parsed.hostname:
+        return raw
+    password = unquote(parsed.password, encoding="utf-8", errors="replace")
     host = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port else ""
     user = quote(parsed.username, safe="")
@@ -47,12 +49,36 @@ def normalize_database_url(raw: str) -> str:
         (
             parsed.scheme,
             netloc,
-            parsed.path,
+            parsed.path or "/postgres",
             parsed.params,
             parsed.query,
             parsed.fragment,
         )
     )
+
+
+async def _open_pool(url: str) -> asyncpg.Pool:
+    raw = url.strip()
+    attempts = [raw]
+    normalized = normalize_database_url(raw)
+    if normalized != raw:
+        attempts.append(normalized)
+    last_exc: Exception | None = None
+    for dsn in attempts:
+        try:
+            return await asyncpg.create_pool(
+                dsn,
+                min_size=1,
+                max_size=4,
+                command_timeout=30,
+                statement_cache_size=0,
+            )
+        except Exception as exc:
+            last_exc = exc
+            host_hint = dsn.split("@")[-1] if "@" in dsn else dsn
+            logger.warning("asyncpg pool failed (%s): %s", host_hint, exc)
+    assert last_exc is not None
+    raise last_exc
 
 
 def database_url() -> str:
