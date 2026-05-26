@@ -61,9 +61,21 @@ class Settings(BaseSettings):
         return (self.public_base_url or self.webhook_base_url).rstrip("/")
 
     @property
+    def app_version(self) -> str:
+        env = os.getenv("RENDER_GIT_COMMIT", "").strip()
+        if env:
+            return env[:12]
+        version_file = BASE_DIR / "VERSION"
+        if version_file.is_file():
+            return version_file.read_text(encoding="utf-8").strip() or "dev"
+        return "dev"
+
+    @property
     def miniapp_url(self) -> str:
         base = self.app_base_url
-        return f"{base}/miniapp" if base else ""
+        if not base:
+            return ""
+        return f"{base}/miniapp?v={self.app_version}"
 
     @property
     def webhook_route(self) -> str:

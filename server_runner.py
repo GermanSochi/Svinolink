@@ -12,7 +12,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from bot_startup import configure_bot
 from config import settings
 from instagram_download import init_instagram_downloader
-from webapp_server import register_miniapp_routes
+from webapp_server import STATIC, register_miniapp_routes
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,16 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
     app = web.Application()
 
     async def health(_: web.Request) -> web.Response:
+        miniapp_html = ""
+        try:
+            miniapp_html = (STATIC / "index.html").read_text(encoding="utf-8")
+        except OSError:
+            pass
         payload = {
             "status": "ok",
             "bot": "svinolink",
+            "version": settings.app_version,
+            "miniapp_manual_input": "manualChatId" in miniapp_html,
             "miniapp": "on" if settings.miniapp_url else "off",
             "mode": "webhook" if webhook else "polling",
         }

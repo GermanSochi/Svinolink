@@ -4,6 +4,8 @@ services:
     name: svinolink-bot
     runtime: docker
     plan: free
+    autoDeploy: true
+    branch: master
     healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
