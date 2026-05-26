@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     )
     supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
 
+    @field_validator("supabase_database_url", mode="before")
+    @classmethod
+    def normalize_supabase_url(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        url = v.strip()
+        if len(url) >= 2 and url[0] == url[-1] and url[0] in "\"'":
+            url = url[1:-1].strip()
+        return url
+
     @field_validator("webhook_base_url", "public_base_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, v: object) -> object:

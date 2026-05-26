@@ -85,7 +85,30 @@ def parse_postgres_url(raw: str) -> PgParams:
         host = hostport
         port = 6543 if "supabase.com" in hostport else 5432
 
+    if not host:
+        raise ValueError("хост пустой — проверьте SUPABASE_DATABASE_URL на Render")
+
     return PgParams(user=user, password=password, host=host, port=port, database=database)
+
+
+def url_hint(raw: str) -> str:
+    """Безопасная диагностика URL (без пароля) для /health/db."""
+    try:
+        params = parse_postgres_url(raw)
+        return f"user={params.user} host={params.host}:{params.port} db={params.database}"
+    except Exception as exc:
+        url = raw.strip()
+        for prefix in ("postgresql://", "postgres://"):
+            if url.startswith(prefix):
+                rest = url[len(prefix) :]
+                break
+        else:
+            return f"bad scheme: {exc}"
+        at = rest.rfind("@")
+        if at == -1:
+            return f"no @ before host: {exc}"
+        tail = rest[at + 1 :]
+        return f"tail after @={tail[:48]!r}… ({exc})"
 
 
 def password_attempts(password: str) -> list[str]:
@@ -232,10 +255,9 @@ async def check_connection(url: str | None = None) -> tuple[bool, str]:
             await conn.close()
     except Exception as exc:
         try:
-            params = parse_postgres_url(raw)
-            hint = f"parsed host={params.host}:{params.port} db={params.database}"
-        except Exception as parse_exc:
-            hint = f"parse: {parse_exc}"
+            hint = url_hint(raw)
+        except Exception:
+            hint = "parse failed"
         errors.append(f"parsed: {exc}; {hint}")
 
     return False, " | ".join(errors)
