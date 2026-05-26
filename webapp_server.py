@@ -9,7 +9,7 @@ from aiohttp import web
 
 from config import settings
 from deps import store
-from miniapp_auth import parse_init_data
+from miniapp_auth import parse_init_data, parse_user_session
 from store import TriggerRule
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ def _rules_from_payload(items: list[dict]) -> list[TriggerRule]:
         if not words or not response:
             continue
         safe = "".join(c for c in words[0] if c.isalnum())[:12] or "w"
+        uid = item.get("added_by_user_id")
         rules.append(
             TriggerRule(
                 id=str(item.get("id") or f"t-{int(time.time())}-{i}-{safe}"),
@@ -44,9 +45,28 @@ def _rules_from_payload(items: list[dict]) -> list[TriggerRule]:
                 response=response,
                 once_per_day=bool(item.get("once_per_day", False)),
                 match=str(item.get("match") or "exact"),
+                added_by_user_id=int(uid) if uid is not None else None,
+                added_by_username=item.get("added_by_username"),
             )
         )
     return rules
+
+
+def _merge_authorship(
+    chat_id: int, rules: list[TriggerRule], session
+) -> list[TriggerRule]:
+    old = {r.id: r for r in store.load_custom(chat_id)}
+    merged: list[TriggerRule] = []
+    for rule in rules:
+        prev = old.get(rule.id)
+        if prev and (prev.added_by_user_id or prev.added_by_username):
+            rule.added_by_user_id = prev.added_by_user_id
+            rule.added_by_username = prev.added_by_username
+        else:
+            rule.added_by_user_id = session.user_id
+            rule.added_by_username = session.username
+        merged.append(rule)
+    return merged
 
 
 async def miniapp_index(_: web.Request) -> web.Response:
@@ -67,6 +87,7 @@ async def api_get_triggers(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "chat_id": session.chat_id,
+                "title": store.get_chat_title(session.chat_id),
                 "builtin": [
                     {
                         "words": r.words,
@@ -83,6 +104,8 @@ async def api_get_triggers(request: web.Request) -> web.Response:
                         "response": r.response,
                         "once_per_day": r.once_per_day,
                         "match": r.match,
+                        "added_by_user_id": r.added_by_user_id,
+                        "added_by_username": r.added_by_username,
                     }
                     for r in custom
                 ],
@@ -90,6 +113,47 @@ async def api_get_triggers(request: web.Request) -> web.Response:
         )
     except Exception as exc:
         logger.warning("api_get_triggers: %s", exc)
+        return web.json_response({"error": str(exc)}, status=401)
+
+
+async def api_list_chats(request: web.Request) -> web.Response:
+    try:
+        init_raw = _init_data_from_request(request)
+        parse_user_session(init_raw)
+        chats = store.list_active_chats()
+        payload = []
+        defaults = store.load_defaults()
+        for chat in chats:
+            cid = chat["chat_id"]
+            custom = store.load_custom(cid)
+            payload.append(
+                {
+                    "chat_id": cid,
+                    "title": chat["title"] or f"Чат {cid}",
+                    "builtin": [
+                        {
+                            "words": r.words,
+                            "response": r.response,
+                            "once_per_day": r.once_per_day,
+                        }
+                        for r in defaults
+                    ],
+                    "custom": [
+                        {
+                            "id": r.id,
+                            "words": r.words,
+                            "response": r.response,
+                            "once_per_day": r.once_per_day,
+                            "added_by_username": r.added_by_username,
+                            "added_by_user_id": r.added_by_user_id,
+                        }
+                        for r in custom
+                    ],
+                }
+            )
+        return web.json_response({"chats": payload})
+    except Exception as exc:
+        logger.warning("api_list_chats: %s", exc)
         return web.json_response({"error": str(exc)}, status=401)
 
 
@@ -104,6 +168,7 @@ async def api_save_triggers(request: web.Request) -> web.Response:
         if not isinstance(items, list):
             raise ValueError("неверный формат")
         rules = _rules_from_payload(items)
+        rules = _merge_authorship(session.chat_id, rules, session)
         store.save_custom(session.chat_id, rules)
         return web.json_response(
             {
@@ -122,4 +187,5 @@ def register_miniapp_routes(app: web.Application) -> None:
     app.router.add_get("/miniapp", miniapp_index)
     app.router.add_get("/miniapp/", miniapp_index)
     app.router.add_get("/api/triggers", api_get_triggers)
+    app.router.add_get("/api/chats", api_list_chats)
     app.router.add_post("/api/triggers", api_save_triggers)

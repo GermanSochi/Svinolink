@@ -5,7 +5,7 @@ import logging
 import sys
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
@@ -15,7 +15,7 @@ from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
 from server_runner import run_polling_with_http, run_webhook_mode
-from trigger_fsm import PRIVATE_GREET, router as trigger_router
+from trigger_fsm import PRIVATE_GREET, router as trigger_router, send_private_triggers_menu
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +31,8 @@ async def handle_triggers(message: Message, bot: Bot) -> None:
         return
 
     cid = message.chat.id
+    if message.chat.type in {"group", "supergroup"}:
+        store.register_chat(cid, title=message.chat.title, chat_type=message.chat.type)
     rules = store.load_triggers(cid)
     rule = store.find_match(message.text, rules)
     if not rule:
@@ -58,6 +60,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
     if message.chat.type == "private":
         await bot.send_message(message.chat.id, PRIVATE_GREET)
+        await send_private_triggers_menu(message)
         return
     kb = miniapp_keyboard(message.chat.id) if settings.miniapp_url else None
     short = GROUP_GREET.split("\n\n@BotFather")[0]
@@ -67,17 +70,17 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
-    # Instagram — самый первый хендлер (до триггеров и FSM)
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
+    dp.include_router(trigger_router)
     dp.include_router(chat_router)
     dp.include_router(admin_router)
-    dp.include_router(trigger_router)
 
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(
         handle_triggers,
         StateFilter(None),
         F.text,
+        ~Command(),
         ~F.text.regexp(r"(?i)instagram\.com"),
     )
     return dp

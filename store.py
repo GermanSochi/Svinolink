@@ -19,6 +19,8 @@ class TriggerRule:
     once_per_day: bool
     match: str  # exact | contains
     builtin: bool = False
+    added_by_user_id: int | None = None
+    added_by_username: str | None = None
 
 
 class TriggerStore:
@@ -41,6 +43,19 @@ class TriggerStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS known_chats (
+                    chat_id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    chat_type TEXT NOT NULL DEFAULT 'group',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    first_seen REAL NOT NULL,
+                    last_seen REAL NOT NULL
+                )
+                """
+            )
+        self._sync_chats_from_disk()
 
     def _chat_path(self, chat_id: int) -> Path:
         return settings.data_dir / "chats" / f"{chat_id}.json"
@@ -62,6 +77,8 @@ class TriggerStore:
                     once_per_day=bool(item.get("once_per_day", False)),
                     match=str(item.get("match", "exact")),
                     builtin=builtin,
+                    added_by_user_id=item.get("added_by_user_id"),
+                    added_by_username=item.get("added_by_username"),
                 )
             )
         return out
@@ -84,6 +101,8 @@ class TriggerStore:
                     "response": r.response,
                     "once_per_day": r.once_per_day,
                     "match": r.match,
+                    "added_by_user_id": r.added_by_user_id,
+                    "added_by_username": r.added_by_username,
                 }
                 for r in rules
             ]
@@ -92,6 +111,7 @@ class TriggerStore:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        self.register_chat(chat_id)
 
     def add_custom_rule(
         self,
@@ -159,8 +179,88 @@ class TriggerStore:
             for i, r in enumerate(custom, start=1):
                 w = ", ".join(r.words)
                 d = " · 1/день" if r.once_per_day else ""
-                lines.append(f"{i}. [{w}] → {r.response}{d}")
+                who = ""
+                if r.added_by_username:
+                    who = f" · @{r.added_by_username.lstrip('@')}"
+                elif r.added_by_user_id:
+                    who = f" · id{r.added_by_user_id}"
+                lines.append(f"{i}. [{w}] → {r.response}{d}{who}")
         return lines
+
+    def register_chat(
+        self,
+        chat_id: int,
+        title: str | None = None,
+        chat_type: str = "group",
+        *,
+        active: bool = True,
+    ) -> None:
+        now = time.time()
+        safe_title = (title or "").strip()
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                """
+                INSERT INTO known_chats (chat_id, title, chat_type, active, first_seen, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    title=CASE
+                        WHEN excluded.title != '' THEN excluded.title
+                        ELSE known_chats.title
+                    END,
+                    chat_type=excluded.chat_type,
+                    active=excluded.active,
+                    last_seen=excluded.last_seen
+                """,
+                (chat_id, safe_title, chat_type, 1 if active else 0, now, now),
+            )
+
+    def deactivate_chat(self, chat_id: int) -> None:
+        now = time.time()
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "UPDATE known_chats SET active=0, last_seen=? WHERE chat_id=?",
+                (now, chat_id),
+            )
+
+    def get_chat_title(self, chat_id: int) -> str:
+        with sqlite3.connect(self._db) as conn:
+            row = conn.execute(
+                "SELECT title FROM known_chats WHERE chat_id=?",
+                (chat_id,),
+            ).fetchone()
+        return str(row[0]) if row and row[0] else ""
+
+    def list_active_chats(self) -> list[dict]:
+        with sqlite3.connect(self._db) as conn:
+            rows = conn.execute(
+                """
+                SELECT chat_id, title, chat_type
+                FROM known_chats
+                WHERE active=1
+                ORDER BY last_seen DESC
+                """
+            ).fetchall()
+        return [
+            {"chat_id": int(r[0]), "title": str(r[1] or ""), "chat_type": str(r[2])}
+            for r in rows
+        ]
+
+    def chat_trigger_summary(self, chat_id: int) -> str:
+        custom = self.load_custom(chat_id)
+        builtin_n = len(self.load_defaults())
+        if not custom:
+            return f"системных {builtin_n}, своих нет"
+        return f"системных {builtin_n}, своих {len(custom)}"
+
+    def _sync_chats_from_disk(self) -> None:
+        chats_dir = settings.data_dir / "chats"
+        if not chats_dir.is_dir():
+            return
+        for path in chats_dir.glob("*.json"):
+            stem = path.stem
+            if not stem.lstrip("-").isdigit():
+                continue
+            self.register_chat(int(stem), title=f"Чат {stem}")
 
     def remember_style(self, chat_id: int, phrase: str) -> None:
         path = self._style_path(chat_id)

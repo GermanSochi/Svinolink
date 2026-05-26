@@ -141,6 +141,20 @@
     .toast.ok { border-color: var(--ok); }
     .empty { text-align: center; color: var(--muted); padding: 24px; font-size: .9rem; }
     .loader { text-align: center; padding: 40px; color: var(--muted); }
+    .pick-btn {
+      width: 100%;
+      text-align: left;
+      padding: 14px;
+      margin-bottom: 8px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .pick-btn small { display: block; color: var(--muted); margin-top: 4px; font-size: .78rem; }
+    .author { font-size: .72rem; color: var(--muted); margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -154,6 +168,10 @@
 
   <div id="toast" class="toast"></div>
   <div id="loader" class="loader">Сек…</div>
+  <div id="pickerSection" style="display:none">
+    <div class="section-title">Выбери группу</div>
+    <div id="pickerList"></div>
+  </div>
   <div id="builtinSection" style="display:none">
     <div class="section-title">Системные триггеры (да · 300 · триста · стристо)</div>
     <div id="builtinList"></div>
@@ -229,6 +247,12 @@ const DEFAULT_BUILTIN = [
   { words: ['300', 'триста', 'стристо'], response: 'отсоси у тракториста', once_per_day: false, match: 'exact' },
 ];
 
+function authorLabel(r) {
+  if (r.added_by_username) return '@' + String(r.added_by_username).replace(/^@/, '');
+  if (r.added_by_user_id) return 'id' + r.added_by_user_id;
+  return 'неизвестно';
+}
+
 function renderBuiltin(list) {
   const box = document.getElementById('builtinList');
   box.innerHTML = '';
@@ -260,11 +284,13 @@ function renderCustom() {
     card.className = 'card';
     card.dataset.index = i;
     const words = (r.words || []).join(', ');
+    const who = authorLabel(r);
     card.innerHTML = `
       <div class="card-head">
         <span class="badge">#${i + 1}</span>
         <button type="button" class="btn-icon" data-del="${i}">✕</button>
       </div>
+      <div class="author">добавил: ${esc(who)}</div>
       <label>Слова (через запятую)</label>
       <input class="inp-words" value="${esc(words)}" placeholder="да, 300" />
       <label>Ответ бота</label>
@@ -334,31 +360,87 @@ document.getElementById('btnSave').onclick = async () => {
   btn.textContent = 'Сохранить для всех в чате';
 };
 
+function hideEditor() {
+  document.getElementById('builtinSection').style.display = 'none';
+  document.getElementById('customSection').style.display = 'none';
+  document.getElementById('btnAdd').style.display = 'none';
+  document.querySelector('.save-bar').style.display = 'none';
+}
+
+function showEditor() {
+  document.getElementById('btnAdd').style.display = 'block';
+  document.querySelector('.save-bar').style.display = 'block';
+}
+
+async function renderPicker(chats) {
+  hideEditor();
+  const box = document.getElementById('pickerList');
+  box.innerHTML = '';
+  if (!chats.length) {
+    box.innerHTML = '<div class="empty">Нет групп. Добавь бота в чат и напиши там /triggers</div>';
+  } else {
+    chats.forEach(c => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pick-btn';
+      const customN = (c.custom || []).length;
+      btn.innerHTML = `<strong>${esc(c.title || ('Чат ' + c.chat_id))}</strong><small>своих триггеров: ${customN}</small>`;
+      btn.onclick = () => {
+        chatId = c.chat_id;
+        const url = new URL(location.href);
+        url.searchParams.set('chat_id', String(chatId));
+        history.replaceState({}, '', url);
+        document.getElementById('pickerSection').style.display = 'none';
+        showEditor();
+        loadTriggersForChat();
+      };
+      box.appendChild(btn);
+    });
+  }
+  document.getElementById('pickerSection').style.display = 'block';
+  document.getElementById('loader').style.display = 'none';
+  document.getElementById('chatHint').textContent = 'Выбери группу для настройки';
+}
+
+async function loadTriggersForChat() {
+  const loader = document.getElementById('loader');
+  loader.style.display = 'block';
+  loader.textContent = 'Сек…';
+  const q = `?chat_id=${chatId}`;
+  const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'нет доступа');
+  chatId = j.chat_id;
+  document.getElementById('chatHint').textContent = (j.title || ('Чат ' + chatId)) + ' · правки для всех';
+  renderBuiltin(j.builtin || []);
+  custom = j.custom || [];
+  renderCustom();
+  loader.style.display = 'none';
+}
+
 async function load() {
   const loader = document.getElementById('loader');
   try {
-    chatId = resolveChatId();
-    if (chatId == null) {
-      throw new Error('нет chat_id — открой /triggers в групповом чате');
-    }
-    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · загрузка…';
-
     await waitInitData();
     if (!tg?.initData) {
       throw new Error('нет initData — открой Mini App из Telegram');
     }
 
-    const q = `?chat_id=${chatId}`;
-    const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'нет доступа');
-    chatId = j.chat_id;
-    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · правки для всех';
-    renderBuiltin(j.builtin || []);
-    custom = j.custom || [];
-    renderCustom();
-    loader.style.display = 'none';
+    chatId = resolveChatId();
+    if (chatId == null) {
+      document.getElementById('chatHint').textContent = 'Группы бота';
+      const r = await fetch('/api/chats', { headers: apiHeaders() });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'нет доступа');
+      await renderPicker(j.chats || []);
+      return;
+    }
+
+    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · загрузка…';
+    showEditor();
+    await loadTriggersForChat();
   } catch (e) {
+    loader.style.display = 'block';
     loader.textContent = e.message || 'ошибка загрузки';
     document.getElementById('chatHint').textContent = e.message || 'ошибка';
   }

@@ -15,6 +15,20 @@ class WebAppSession:
     username: str | None
 
 
+def parse_user_session(init_data: str) -> WebAppSession:
+    if not init_data:
+        raise ValueError("нет initData — открой Mini App из Telegram")
+    parsed = safe_parse_webapp_init_data(settings.bot_token, init_data)
+    if not parsed.user:
+        raise ValueError("нет пользователя")
+    chat_id = parsed.chat.id if parsed.chat else 0
+    return WebAppSession(
+        user_id=parsed.user.id,
+        chat_id=chat_id,
+        username=parsed.user.username,
+    )
+
+
 def parse_init_data(init_data: str, *, fallback_chat_id: int | None = None) -> WebAppSession:
     if not init_data:
         raise ValueError("нет initData — открой Mini App из Telegram")

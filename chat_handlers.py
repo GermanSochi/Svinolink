@@ -6,7 +6,7 @@ import os
 import re
 
 from aiogram import Bot, F, Router
-from aiogram.filters import BaseFilter, StateFilter
+from aiogram.filters import BaseFilter, Command, StateFilter
 from aiogram.types import FSInputFile, Message
 
 from config import settings
@@ -74,6 +74,12 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             text[:200],
         )
 
+        store.register_chat(
+            message.chat.id,
+            title=message.chat.title,
+            chat_type=message.chat.type,
+        )
+
         from instagram_download import download_instagram_video, remove_file
         from instagram_urls import is_instagram_media_url
 
@@ -120,7 +126,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 pass
 
 
-@router.message(StateFilter(None), F.text)
+@router.message(StateFilter(None), F.text, ~Command())
 async def handle_wake(message: Message, bot: Bot) -> None:
     if message_has_instagram_link(message):
         return
@@ -139,11 +145,9 @@ async def handle_wake(message: Message, bot: Bot) -> None:
         )
 
 
-@router.message(StateFilter(None), F.text)
+@router.message(StateFilter(None), F.text, ~Command())
 async def handle_riddle_answer(message: Message, bot: Bot) -> None:
     if not message.from_user or not message.text:
-        return
-    if message.text.startswith("/"):
         return
     if message_has_instagram_link(message):
         return
