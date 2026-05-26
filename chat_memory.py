@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, unquote, urlparse, urlunparse
+from urllib.parse import unquote
 
 import asyncpg
 
@@ -29,60 +30,126 @@ ON chat_history (chat_id, created_at DESC);
 """
 
 
-def normalize_database_url(raw: str) -> str:
-    """Корректно обрабатывает % и %25 в пароле PostgreSQL URI."""
-    raw = raw.strip()
-    if not raw:
-        return raw
-    parsed = urlparse(raw)
-    if not parsed.scheme.startswith("postgres") or not parsed.username or not parsed.password:
-        return raw
-    if parsed.port is None and parsed.hostname and ":" in parsed.hostname:
-        return raw
-    password = unquote(parsed.password, encoding="utf-8", errors="replace")
-    host = parsed.hostname or ""
-    port = f":{parsed.port}" if parsed.port else ""
-    user = quote(parsed.username, safe="")
-    pwd = quote(password, safe="")
-    netloc = f"{user}:{pwd}@{host}{port}"
-    return urlunparse(
-        (
-            parsed.scheme,
-            netloc,
-            parsed.path or "/postgres",
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
+@dataclass(frozen=True)
+class PgParams:
+    user: str
+    password: str
+    host: str
+    port: int
+    database: str
+
+
+def parse_postgres_url(raw: str) -> PgParams:
+    """Парсит URI через rfind('@') — пароль может содержать @, :, %."""
+    url = raw.strip()
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            rest = url[len(prefix) :]
+            break
+    else:
+        raise ValueError("ожидается postgres:// или postgresql://")
+
+    if "?" in rest:
+        rest = rest.split("?", 1)[0]
+
+    if "/" in rest:
+        hostpart, dbname = rest.rsplit("/", 1)
+        database = dbname or "postgres"
+    else:
+        hostpart = rest
+        database = "postgres"
+
+    at = hostpart.rfind("@")
+    if at == -1:
+        raise ValueError("в URL нет @ между паролем и хостом")
+
+    userinfo = hostpart[:at]
+    hostport = hostpart[at + 1 :]
+
+    colon = userinfo.find(":")
+    if colon == -1:
+        raise ValueError("в URL нет : между логином и паролем")
+
+    user = unquote(userinfo[:colon])
+    password = unquote(userinfo[colon + 1 :])
+
+    if ":" in hostport:
+        host, port_raw = hostport.rsplit(":", 1)
+        port = int(port_raw)
+    else:
+        host = hostport
+        port = 5432
+
+    return PgParams(user=user, password=password, host=host, port=port, database=database)
+
+
+def password_attempts(password: str) -> list[str]:
+    """Пробуем decoded пароль и вариант без двойного %25 (Render иногда кодирует дважды)."""
+    attempts = [password]
+    if "%25" in password:
+        attempts.append(password.replace("%25", "%"))
+    if password != unquote(password):
+        attempts.append(unquote(password))
+    out: list[str] = []
+    for item in attempts:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _connect_kwargs(params: PgParams, password: str) -> dict[str, Any]:
+    return {
+        "host": params.host,
+        "port": params.port,
+        "user": params.user,
+        "password": password,
+        "database": params.database,
+        "ssl": "require",
+        "command_timeout": 30,
+        "statement_cache_size": 0,
+    }
 
 
 async def _open_pool(url: str) -> asyncpg.Pool:
-    raw = url.strip()
-    attempts = [raw]
-    normalized = normalize_database_url(raw)
-    if normalized != raw:
-        attempts.append(normalized)
+    params = parse_postgres_url(url)
     last_exc: Exception | None = None
-    for dsn in attempts:
+    for pwd in password_attempts(params.password):
         try:
             return await asyncpg.create_pool(
-                dsn,
+                **_connect_kwargs(params, pwd),
                 min_size=1,
                 max_size=4,
-                command_timeout=30,
-                statement_cache_size=0,
             )
         except Exception as exc:
             last_exc = exc
-            host_hint = dsn.split("@")[-1] if "@" in dsn else dsn
-            logger.warning("asyncpg pool failed (%s): %s", host_hint, exc)
+            logger.warning(
+                "asyncpg pool failed user=%s host=%s:%s: %s",
+                params.user,
+                params.host,
+                params.port,
+                exc,
+            )
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _connect_once(url: str) -> asyncpg.Connection:
+    params = parse_postgres_url(url)
+    last_exc: Exception | None = None
+    for pwd in password_attempts(params.password):
+        try:
+            return await asyncpg.connect(
+                **_connect_kwargs(params, pwd),
+                timeout=20,
+            )
+        except Exception as exc:
+            last_exc = exc
     assert last_exc is not None
     raise last_exc
 
 
 def database_url() -> str:
-    return normalize_database_url(settings.supabase_database_url)
+    return settings.supabase_database_url.strip()
 
 
 def is_memory_enabled() -> bool:
@@ -98,13 +165,7 @@ async def init_chat_memory() -> None:
         return
 
     try:
-        _pool = await asyncpg.create_pool(
-            url,
-            min_size=1,
-            max_size=4,
-            command_timeout=30,
-            statement_cache_size=0,
-        )
+        _pool = await _open_pool(url)
         async with _pool.acquire() as conn:
             await conn.execute(CREATE_TABLE_SQL)
             await conn.execute(CREATE_INDEX_SQL)
@@ -121,25 +182,27 @@ async def init_chat_memory() -> None:
 async def check_connection(url: str | None = None) -> tuple[bool, str]:
     """SELECT 1 + проверка таблицы chat_history. Для health/test."""
     raw = (url or settings.supabase_database_url).strip()
-    dsn = normalize_database_url(raw)
-    if not dsn:
+    if not raw:
         return False, "SUPABASE_DATABASE_URL not set"
 
-    conn = await asyncpg.connect(dsn, timeout=20, statement_cache_size=0)
     try:
-        ping = await conn.fetchval("SELECT 1")
-        if ping != 1:
-            return False, f"unexpected SELECT 1 result: {ping!r}"
+        conn = await _connect_once(raw)
+        try:
+            ping = await conn.fetchval("SELECT 1")
+            if ping != 1:
+                return False, f"unexpected SELECT 1 result: {ping!r}"
 
-        table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
-        if table is None:
-            await conn.execute(CREATE_TABLE_SQL)
-            await conn.execute(CREATE_INDEX_SQL)
             table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
+            if table is None:
+                await conn.execute(CREATE_TABLE_SQL)
+                await conn.execute(CREATE_INDEX_SQL)
+                table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
 
-        return True, f"chat_history={table}"
-    finally:
-        await conn.close()
+            return True, f"chat_history={table}"
+        finally:
+            await conn.close()
+    except Exception as exc:
+        return False, str(exc)
 
 
 async def close_chat_memory() -> None:
