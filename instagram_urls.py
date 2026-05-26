@@ -3,17 +3,18 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-# Как в subzeroid/instagram-downloader-tgbot — ищем URL в любом месте текста
 INSTAGRAM_URL_PATTERN = re.compile(
-    r"https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_./?=&%-]+",
+    r"https?://(?:www\.)?instagram\.com(?:/[a-zA-Z0-9_./?=&%-]*)?",
     re.IGNORECASE,
 )
-
-_SUPPORTED_PATH = re.compile(r"/(reel|reels|p|tv)/", re.IGNORECASE)
+_INSTAGRAM_LOOSE = re.compile(
+    r"(?:https?://)?(?:www\.)?instagram\.com(?:/[a-zA-Z0-9_./?=&%-]*)?",
+    re.IGNORECASE,
+)
+_MEDIA_PATH = re.compile(r"/(reel|reels|p|tv)/", re.IGNORECASE)
 
 
 def clean_instagram_url(url: str) -> str:
-    """Убирает ?igsh=, #fragment и хвостовую пунктуацию."""
     raw = url.strip().strip("()[]<>.,!?:;\"'")
     if "?" in raw:
         raw = raw.split("?", 1)[0]
@@ -35,16 +36,24 @@ def clean_instagram_url(url: str) -> str:
 
 
 def is_instagram_media_url(url: str) -> bool:
-    return "instagram.com" in url.lower() and bool(_SUPPORTED_PATH.search(url))
+    if "instagram.com" not in url.lower():
+        return False
+    return bool(_MEDIA_PATH.search(url))
 
 
 def extract_instagram_url(text: str) -> str | None:
     if not text:
         return None
-    m = INSTAGRAM_URL_PATTERN.search(text)
-    if not m:
-        return None
-    clean = clean_instagram_url(m.group(0))
-    if is_instagram_media_url(clean):
-        return clean
+
+    for pattern in (INSTAGRAM_URL_PATTERN, _INSTAGRAM_LOOSE):
+        m = pattern.search(text)
+        if m:
+            return clean_instagram_url(m.group(0))
+
+    if "instagram.com" in text.lower():
+        for m in re.finditer(r"https?://\S+", text):
+            chunk = m.group(0).strip("()[]<>.,!?:;\"'")
+            if "instagram.com" in chunk.lower():
+                return clean_instagram_url(chunk)
+
     return None

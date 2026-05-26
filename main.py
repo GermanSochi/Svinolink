@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
 from admin_panel import router as admin_router
-from chat_handlers import router as chat_router
+from chat_handlers import IG_LINK_FILTER, handle_instagram_link, router as chat_router
 from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
@@ -67,7 +67,8 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
-    # Ссылки — первым, чтобы не перехватывали другие хендлеры
+    # Instagram — самый первый хендлер (до триггеров и FSM)
+    dp.message.register(handle_instagram_link, IG_LINK_FILTER)
     dp.include_router(chat_router)
     dp.include_router(admin_router)
     dp.include_router(trigger_router)

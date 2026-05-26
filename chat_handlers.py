@@ -5,12 +5,13 @@ import logging
 import re
 
 from aiogram import Bot, F, Router
-from aiogram.filters import BaseFilter, StateFilter
+from aiogram.filters import StateFilter
 from aiogram.types import FSInputFile, Message
 
 from config import settings
 from deps import gpt, store
 from instagram_download import download_instagram_video, remove_file
+from instagram_urls import is_instagram_media_url
 from message_urls import message_has_instagram_link, url_from_message
 from game_store import GameStore
 from riddle_ai import start_riddle_flow, try_solve_riddle
@@ -24,11 +25,11 @@ _WAKE_RE = re.compile(
     r"(?i)(@svinolink_bot|svinolink|свинолинк|свино\s*линк|свин\b|свино\b)"
 )
 
-
-class InstagramLinkFilter(BaseFilter):
-    async def __call__(self, message: Message) -> bool:
-        return message_has_instagram_link(message)
-
+# Максимально широкий фильтр — любая подстрока instagram.com
+IG_LINK_FILTER = (
+    F.text.contains("instagram.com", ignore_case=True)
+    | F.caption.contains("instagram.com", ignore_case=True)
+)
 
 game = GameStore()
 
@@ -52,29 +53,30 @@ def is_wake_message(message: Message) -> bool:
     return False
 
 
-@router.message(StateFilter(None), InstagramLinkFilter())
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
-    text = message.text or message.caption or ""
-    print(f"ПОЛУЧЕНО СООБЩЕНИЕ ИЗ ГРУППЫ: {text}")
-    logger.info(
-        "instagram_handler chat=%s type=%s text=%r",
-        message.chat.id,
-        message.chat.type,
-        text[:200],
-    )
-
-    await message.answer("Сек...")
-
-    clean_url = url_from_message(message)
-    if not clean_url:
-        err = "не удалось вытащить ссылку Instagram"
-        logger.error("%s text=%r", err, text[:300])
-        await message.answer(f"Ошибка при обработке ссылки: {err}")
-        return
-
-    logger.info("IG clean_url=%s", clean_url)
     file_path = None
     try:
+        text = message.text or message.caption or ""
+        print(f"ПОЛУЧЕНО СООБЩЕНИЕ ИЗ ГРУППЫ: {text}")
+        logger.info(
+            "instagram_handler chat=%s type=%s text=%r",
+            message.chat.id,
+            message.chat.type,
+            text[:200],
+        )
+
+        await message.answer("Сек...")
+
+        clean_url = url_from_message(message)
+        if not clean_url:
+            raise ValueError("не удалось вытащить ссылку Instagram из сообщения")
+
+        if not is_instagram_media_url(clean_url):
+            raise ValueError(
+                "нужна ссылка на Reel или пост (/reel/ или /p/), а не просто instagram.com"
+            )
+
+        logger.info("IG clean_url=%s", clean_url)
         file_path = await asyncio.to_thread(download_instagram_video, clean_url)
         await message.answer_video(
             video=FSInputFile(file_path),
@@ -83,13 +85,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             supports_streaming=True,
         )
     except Exception as e:
-        logger.error(
-            "instagram download failed url=%s: %s",
-            clean_url,
-            e,
-            exc_info=True,
-        )
-        await message.answer(f"Ошибка при обработке ссылки: {str(e)}")
+        logger.error("instagram handler error: %s", e, exc_info=True)
+        await message.answer(f"❌ Ошибка в коде бота: {str(e)}")
     finally:
         remove_file(file_path)
 

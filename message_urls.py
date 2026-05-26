@@ -39,4 +39,8 @@ def url_from_message(message: Message) -> str | None:
             found = extract_instagram_url(ent.url)
             if found:
                 return clean_instagram_url(ent.url)
+
+    if "instagram.com" in text.lower():
+        return clean_instagram_url(extract_instagram_url(text) or text.strip().split()[0])
+
     return None
