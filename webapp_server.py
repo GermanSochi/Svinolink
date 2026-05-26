@@ -151,6 +151,24 @@ async def api_list_chats(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=401)
 
 
+async def api_delete_chat(request: web.Request) -> web.Response:
+    try:
+        init_raw = _init_data_from_request(request)
+        parse_user_session(init_raw)
+        body = await request.json()
+        cid = body.get("chat_id")
+        if cid is None:
+            raise ValueError("не указан chat_id")
+        chat_id = int(cid)
+        if chat_id >= 0:
+            raise ValueError("нужен ID группы (отрицательное число)")
+        store.remove_chat_from_miniapp(chat_id)
+        return web.json_response({"ok": True, "chat_id": chat_id})
+    except Exception as exc:
+        logger.warning("api_delete_chat: %s", exc)
+        return web.json_response({"error": str(exc)}, status=400)
+
+
 async def api_save_triggers(request: web.Request) -> web.Response:
     try:
         init_raw = _init_data_from_request(request)
@@ -190,4 +208,5 @@ def register_miniapp_routes(app: web.Application) -> None:
     app.router.add_get("/miniapp/", miniapp_index)
     app.router.add_get("/api/triggers", api_get_triggers)
     app.router.add_get("/api/chats", api_list_chats)
+    app.router.add_delete("/api/chats", api_delete_chat)
     app.router.add_post("/api/triggers", api_save_triggers)

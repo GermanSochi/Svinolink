@@ -206,6 +206,26 @@
       font: 600 .85rem Outfit, sans-serif;
       cursor: pointer;
     }
+    .pick-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
+    .pick-row .pick-btn { flex: 1; margin-bottom: 0; }
+    .pick-del, .btn-danger-soft {
+      border: 1px solid rgba(244,114,182,.35);
+      background: rgba(244,114,182,.12);
+      color: var(--pink);
+      border-radius: 14px;
+      padding: 0 14px;
+      font-size: 1rem;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .btn-danger-soft {
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      font: 600 .82rem Outfit, sans-serif;
+    }
+    .editor-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .editor-actions .btn-danger-soft { width: auto; flex: 1; min-width: 140px; margin-top: 0; }
   </style>
 </head>
 <body>
@@ -218,6 +238,10 @@
   </div>
 
   <button type="button" class="btn-back" id="btnBack" style="display:none">← Все группы</button>
+  <div id="editorActions" class="editor-actions" style="display:none">
+    <button type="button" class="btn-danger-soft" id="btnClearTriggers">🗑 Очистить все свои</button>
+    <button type="button" class="btn-danger-soft" id="btnRemoveGroup">🗑 Убрать группу</button>
+  </div>
 
   <div id="toast" class="toast"></div>
   <div id="loader" class="loader">Сек…</div>
@@ -370,9 +394,17 @@ function renderCustom() {
     box.appendChild(card);
   });
   box.querySelectorAll('[data-del]').forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
+      if (!confirm('Удалить этот триггер?')) return;
       custom.splice(+btn.dataset.del, 1);
       renderCustom();
+      try {
+        await saveCustomSilent();
+        toast('Триггер удалён', true);
+        tg?.HapticFeedback?.notificationOccurred('success');
+      } catch (e) {
+        toast(e.message || 'ошибка', false);
+      }
     };
   });
   document.getElementById('emptyCustom').style.display = custom.length ? 'none' : 'block';
@@ -408,15 +440,7 @@ document.getElementById('btnSave').onclick = async () => {
   btn.disabled = true;
   btn.textContent = 'Сохраняю…';
   try {
-    const payload = collectCustom();
-    const r = await fetch('/api/triggers', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ chat_id: chatId, triggers: payload }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'ошибка');
-    custom = payload;
+    await saveCustomSilent();
     toast('Сохранено для всех в чате', true);
     tg?.HapticFeedback?.notificationOccurred('success');
   } catch (e) {
@@ -427,16 +451,76 @@ document.getElementById('btnSave').onclick = async () => {
   btn.textContent = 'Сохранить для всех в чате';
 };
 
+document.getElementById('btnClearTriggers').onclick = async () => {
+  if (!custom.length) {
+    toast('Своих триггеров нет', false);
+    return;
+  }
+  if (!confirm('Удалить все свои триггеры в этой группе?')) return;
+  custom = [];
+  renderCustom();
+  try {
+    await saveCustomSilent();
+    toast('Все свои триггеры удалены', true);
+  } catch (e) {
+    toast(e.message || 'ошибка', false);
+  }
+};
+
+document.getElementById('btnRemoveGroup').onclick = async () => {
+  if (chatId == null) return;
+  const title = document.getElementById('pageTitle').textContent;
+  try {
+    await deleteGroupFromApp(chatId, title);
+    chatId = null;
+    const url = new URL(location.href);
+    url.searchParams.delete('chat_id');
+    history.replaceState({}, '', url);
+    await loadPicker();
+  } catch (e) {
+    toast(e.message || 'ошибка', false);
+  }
+};
+
 function hideEditor() {
   document.getElementById('builtinSection').style.display = 'none';
   document.getElementById('customSection').style.display = 'none';
   document.getElementById('btnAdd').style.display = 'none';
+  document.getElementById('editorActions').style.display = 'none';
   document.querySelector('.save-bar').style.display = 'none';
 }
 
 function showEditor() {
   document.getElementById('btnAdd').style.display = 'block';
+  document.getElementById('editorActions').style.display = 'flex';
   document.querySelector('.save-bar').style.display = 'block';
+}
+
+async function saveCustomSilent() {
+  const payload = collectCustom();
+  const r = await fetch('/api/triggers', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ chat_id: chatId, triggers: payload }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'ошибка сохранения');
+  custom = payload;
+  return j;
+}
+
+async function deleteGroupFromApp(id, title) {
+  const name = title || ('Чат ' + id);
+  if (!confirm(`Убрать «${name}» из списка и удалить все свои триггеры?\n\nБот останется в группе.`)) return;
+  const r = await fetch('/api/chats', {
+    method: 'DELETE',
+    headers: apiHeaders(),
+    body: JSON.stringify({ chat_id: id }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'не удалось удалить');
+  toast('Группа убрана из списка', true);
+  tg?.HapticFeedback?.notificationOccurred('success');
 }
 
 async function loadPicker() {
@@ -470,12 +554,14 @@ async function renderPicker(chats, errMsg) {
     box.innerHTML = '<div class="empty">🐷 Список пуст.<br><br>1) Перешли боту сообщение из группы в личку<br>2) Жми «Обновить список»<br>3) Или вставь ID вручную ниже</div>';
   } else {
     chats.forEach(c => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'pick-btn';
+      const row = document.createElement('div');
+      row.className = 'pick-row';
       const title = c.title || ('Чат ' + c.chat_id);
       const builtin = c.builtin_count ?? 2;
       const customN = c.custom_count ?? 0;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pick-btn';
       btn.innerHTML = `
         <strong>💬 ${esc(title)}</strong>
         <small>ID: ${c.chat_id}</small>
@@ -484,7 +570,23 @@ async function renderPicker(chats, errMsg) {
           <span>своих: ${customN}</span>
         </div>`;
       btn.onclick = () => openChat(c.chat_id, title);
-      box.appendChild(btn);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'pick-del';
+      del.title = 'Убрать из списка';
+      del.textContent = '🗑';
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await deleteGroupFromApp(c.chat_id, title);
+          await loadPicker();
+        } catch (err) {
+          toast(err.message || 'ошибка', false);
+        }
+      };
+      row.appendChild(btn);
+      row.appendChild(del);
+      box.appendChild(row);
     });
   }
   document.getElementById('pickerSection').style.display = 'block';

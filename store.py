@@ -246,6 +246,13 @@ class TriggerStore:
                 (now, chat_id),
             )
 
+    def remove_chat_from_miniapp(self, chat_id: int) -> None:
+        """Убрать группу из Mini App и удалить все кастомные триггеры."""
+        self.deactivate_chat(chat_id)
+        path = self._chat_path(chat_id)
+        if path.is_file():
+            path.unlink()
+
     def get_chat_title(self, chat_id: int) -> str:
         with sqlite3.connect(self._db) as conn:
             row = conn.execute(
