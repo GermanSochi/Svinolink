@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from bot_startup import configure_bot
+from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, init_chat_memory
 from config import settings
 from instagram_download import init_instagram_downloader
@@ -52,6 +53,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             "status": "ok",
             "bot": "svinolink",
             "version": settings.app_version,
+            "svin_hourly_limit": HOURLY_LIMIT,
             "miniapp_manual_input": "manualChatId" in miniapp_html,
             "miniapp": "on" if settings.miniapp_url else "off",
             "mode": "webhook" if webhook else "polling",

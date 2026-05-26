@@ -17,7 +17,7 @@ from chat_handlers import (
     handle_svin_ai,
     router as chat_router,
 )
-from chat_memory import close_chat_memory, init_chat_memory
+from chat_memory import close_chat_memory
 from memory_handlers import router as memory_router
 from config import settings
 from deps import gpt, store

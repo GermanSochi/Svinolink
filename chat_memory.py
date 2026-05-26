@@ -71,17 +71,25 @@ async def init_chat_memory() -> None:
         logger.warning("SUPABASE_DATABASE_URL не задан — память чата отключена")
         return
 
-    _pool = await asyncpg.create_pool(
-        url,
-        min_size=1,
-        max_size=4,
-        command_timeout=30,
-        statement_cache_size=0,
-    )
-    async with _pool.acquire() as conn:
-        await conn.execute(CREATE_TABLE_SQL)
-        await conn.execute(CREATE_INDEX_SQL)
-    logger.info("Supabase chat_history ready")
+    try:
+        _pool = await asyncpg.create_pool(
+            url,
+            min_size=1,
+            max_size=4,
+            command_timeout=30,
+            statement_cache_size=0,
+        )
+        async with _pool.acquire() as conn:
+            await conn.execute(CREATE_TABLE_SQL)
+            await conn.execute(CREATE_INDEX_SQL)
+        logger.info("Supabase chat_history ready")
+    except Exception as exc:
+        _pool = None
+        logger.error(
+            "Supabase init failed — бот стартует без памяти чата: %s",
+            exc,
+            exc_info=True,
+        )
 
 
 async def check_connection(url: str | None = None) -> tuple[bool, str]:
