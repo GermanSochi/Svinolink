@@ -4,7 +4,7 @@ import re
 
 from aiogram.types import Message
 
-from downloader import extract_instagram_url
+from instagram_urls import clean_instagram_url, extract_instagram_url
 
 _IG_HINT = re.compile(r"(?i)instagram\.com")
 
@@ -27,16 +27,16 @@ def url_from_message(message: Message) -> str | None:
     text = message.text or message.caption or ""
     found = extract_instagram_url(text)
     if found:
-        return found
+        return clean_instagram_url(found)
 
     for ent in message.entities or message.caption_entities or []:
         if ent.type == "url":
             chunk = text[ent.offset : ent.offset + ent.length]
             found = extract_instagram_url(chunk)
             if found:
-                return found
+                return clean_instagram_url(found)
         if ent.type == "text_link" and ent.url:
             found = extract_instagram_url(ent.url)
             if found:
-                return found
+                return clean_instagram_url(ent.url)
     return None

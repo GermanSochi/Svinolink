@@ -31,6 +31,14 @@ class Settings(BaseSettings):
 
     triggers_file: Path = Field(default=BASE_DIR / "triggers.json", alias="TRIGGERS_FILE")
     data_dir: Path = Field(default=BASE_DIR / "data", alias="DATA_DIR")
+    downloads_dir: Path = Field(default=BASE_DIR / "downloads", alias="DOWNLOADS_DIR")
+
+    instagram_username: str = Field(default="", alias="INSTAGRAM_USERNAME")
+    instagram_password: str = Field(default="", alias="INSTAGRAM_PASSWORD")
+    instagram_session_file: Path = Field(
+        default=BASE_DIR / "data" / "instagram_session.json",
+        alias="INSTAGRAM_SESSION_FILE",
+    )
 
     @field_validator("webhook_base_url", "public_base_url", mode="before")
     @classmethod

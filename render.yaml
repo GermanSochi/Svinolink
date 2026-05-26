@@ -22,5 +22,11 @@ services:
         sync: false
       - key: INSTAGRAM_COOKIES_FILE
         sync: false
+      - key: INSTAGRAM_USERNAME
+        sync: false
+      - key: INSTAGRAM_PASSWORD
+        sync: false
+      - key: DOWNLOADS_DIR
+        value: /app/downloads
       - key: PORT
         value: "8080"

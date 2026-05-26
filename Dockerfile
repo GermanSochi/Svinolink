@@ -13,7 +13,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
 
-# Render/Railway/Fly обычно прокидывают PORT
-ENV PORT=8080
+RUN mkdir -p /app/downloads /app/data
+
+ENV DOWNLOADS_DIR=/app/downloads \
+    PORT=8080
 CMD ["python", "main.py"]
 

@@ -10,7 +10,7 @@ from aiogram.types import FSInputFile, Message
 
 from config import settings
 from deps import gpt, store
-from downloader import cleanup_paths, download_to_temp_mp4
+from instagram_download import download_instagram_video, remove_file
 from message_urls import message_has_instagram_link, url_from_message
 from game_store import GameStore
 from riddle_ai import start_riddle_flow, try_solve_riddle
@@ -64,30 +64,33 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     await message.answer("Сек...")
 
-    url = url_from_message(message)
-    if not url:
+    clean_url = url_from_message(message)
+    if not clean_url:
         err = "не удалось вытащить ссылку Instagram"
         logger.error("%s text=%r", err, text[:300])
         await message.answer(f"Ошибка при обработке ссылки: {err}")
         return
 
-    logger.info("IG url=%s", url[:160])
+    logger.info("IG clean_url=%s", clean_url)
     file_path = None
     try:
-        file_path = await asyncio.to_thread(download_to_temp_mp4, url)
-        await bot.send_video(
-            chat_id=message.chat.id,
+        file_path = await asyncio.to_thread(download_instagram_video, clean_url)
+        await message.answer_video(
             video=FSInputFile(file_path),
             caption=CAPTION,
             reply_to_message_id=message.message_id,
             supports_streaming=True,
         )
     except Exception as e:
-        logger.error("instagram download failed url=%s: %s", url, e, exc_info=True)
+        logger.error(
+            "instagram download failed url=%s: %s",
+            clean_url,
+            e,
+            exc_info=True,
+        )
         await message.answer(f"Ошибка при обработке ссылки: {str(e)}")
     finally:
-        if file_path:
-            cleanup_paths(file_path)
+        remove_file(file_path)
 
 
 @router.message(StateFilter(None), F.text)
