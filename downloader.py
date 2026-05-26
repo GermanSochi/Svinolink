@@ -7,18 +7,45 @@ from pathlib import Path
 
 from yt_dlp import YoutubeDL
 
-_IG_RE = re.compile(
-    r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p|tv|share/reel|share/p)/[\w-]+",
+# Любая ссылка с этими доменами (в т.ч. с ?query и хвостовой пунктуацией)
+_URL_TAIL = r"[^\s\]\)\"\'<>]+"
+_IG_URL = re.compile(
+    rf"https?://(?:www\.)?instagram\.com/{_URL_TAIL}",
     re.IGNORECASE,
 )
-_YT_SHORTS_RE = re.compile(
-    r"https?://(?:www\.)?(?:m\.)?youtube\.com/shorts/[\w-]+",
+_YT_URL = re.compile(
+    rf"https?://(?:www\.)?(?:m\.)?(?:youtube\.com/{_URL_TAIL}|youtu\.be/{_URL_TAIL})",
     re.IGNORECASE,
 )
+# Без схемы: instagram.com/reel/...
+_IG_LOOSE = re.compile(
+    rf"(?:https?://)?(?:www\.)?instagram\.com/{_URL_TAIL}",
+    re.IGNORECASE,
+)
+_YT_LOOSE = re.compile(
+    rf"(?:https?://)?(?:www\.)?(?:m\.)?(?:youtube\.com/{_URL_TAIL}|youtu\.be/{_URL_TAIL})",
+    re.IGNORECASE,
+)
+
+
+def _clean_url(raw: str) -> str:
+    return raw.strip("()[]<>.,!?:;\"'").rstrip("/")
+
+
+def _normalize_loose(url: str) -> str:
+    u = _clean_url(url)
+    if not u.lower().startswith("http"):
+        u = "https://" + u.lstrip("/")
+    return u
+
+
 def _is_supported(url: str) -> bool:
-    if _IG_RE.search(url):
-        return True
-    if _YT_SHORTS_RE.search(url):
+    u = url.lower()
+    if "instagram.com" in u:
+        return any(x in u for x in ("/reel", "/reels", "/p/", "/tv/", "/share/"))
+    if "youtube.com" in u:
+        return "/shorts/" in u or "/shorts?" in u or "watch" in u
+    if "youtu.be/" in u:
         return True
     return False
 
@@ -26,15 +53,19 @@ def _is_supported(url: str) -> bool:
 def extract_supported_url(text: str) -> str | None:
     if not text:
         return None
+
+    for pattern in (_IG_URL, _YT_URL, _IG_LOOSE, _YT_LOOSE):
+        m = pattern.search(text)
+        if m:
+            candidate = _normalize_loose(m.group(0))
+            if _is_supported(candidate):
+                return candidate
+
     for m in re.finditer(r"https?://\S+", text):
-        raw = m.group(0).strip("()[]<>.,!?:;\"'")
+        raw = _clean_url(m.group(0))
         if _is_supported(raw):
             return raw
     return None
-
-
-def extract_url_from_message_text(text: str | None) -> str | None:
-    return extract_supported_url(text or "")
 
 
 def download_to_temp_mp4(url: str) -> Path:

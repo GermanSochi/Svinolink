@@ -67,12 +67,18 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
+    # Ссылки — первым, чтобы не перехватывали другие хендлеры
+    dp.include_router(chat_router)
     dp.include_router(admin_router)
     dp.include_router(trigger_router)
-    dp.include_router(chat_router)
 
     dp.message.register(cmd_start, CommandStart())
-    dp.message.register(handle_triggers, StateFilter(None), F.text)
+    dp.message.register(
+        handle_triggers,
+        StateFilter(None),
+        F.text,
+        ~F.text.regexp(r"(?i)(instagram\.com|youtube\.com|youtu\.be)"),
+    )
     return dp
 
 
