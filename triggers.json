@@ -1,0 +1,18 @@
+{
+  "triggers": [
+    {
+      "id": "da-pizda",
+      "words": ["да"],
+      "response": "пизда",
+      "once_per_day": true,
+      "match": "exact"
+    },
+    {
+      "id": "three-hundred",
+      "words": ["300", "триста", "стристо"],
+      "response": "отсоси у тракториста",
+      "once_per_day": false,
+      "match": "exact"
+    }
+  ]
+}
