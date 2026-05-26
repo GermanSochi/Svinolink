@@ -10,7 +10,8 @@ from aiogram.types import FSInputFile, Message
 
 from config import settings
 from deps import gpt, store
-from downloader import cleanup_paths, download_to_temp_mp4, extract_supported_url
+from downloader import cleanup_paths, download_to_temp_mp4
+from message_urls import url_from_message
 from game_store import GameStore
 from riddle_ai import start_riddle_flow, try_solve_riddle
 from yandex_gpt import YandexGPTError
@@ -45,12 +46,12 @@ def is_wake_message(message: Message) -> bool:
   return False
 
 
-@router.message(StateFilter(None), F.text | F.caption)
+@router.message(StateFilter(None))
 async def handle_links_first(message: Message, bot: Bot) -> None:
-  text = message.text or message.caption or ""
-  url = extract_supported_url(text)
+  url = url_from_message(message)
   if not url:
     return
+  logger.info("link chat=%s url=%s", message.chat.id, url[:80])
 
   status = await bot.send_message(
     message.chat.id,
@@ -100,7 +101,7 @@ async def handle_riddle_answer(message: Message, bot: Bot) -> None:
     return
   if message.text.startswith("/"):
     return
-  if extract_supported_url(message.text):
+  if url_from_message(message):
     return
   if is_wake_message(message):
     return

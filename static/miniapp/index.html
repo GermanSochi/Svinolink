@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Svinolink · Тригеры</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0614;
+      --card: rgba(255,255,255,.06);
+      --border: rgba(168,85,247,.25);
+      --violet: #a855f7;
+      --pink: #f472b6;
+      --gold: #f5e6b8;
+      --text: #faf8ff;
+      --muted: #a99bc9;
+      --ok: #4ade80;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Outfit, system-ui, sans-serif;
+      background: radial-gradient(ellipse 120% 80% at 50% -20%, #2d1b4e 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 16px 16px 100px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .pig {
+      width: 52px; height: 52px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--pink), var(--violet));
+      display: grid; place-items: center;
+      font-size: 28px;
+      box-shadow: 0 8px 24px rgba(168,85,247,.35);
+    }
+    h1 { font-size: 1.35rem; font-weight: 700; }
+    .sub { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+    .section-title {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin: 18px 0 10px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .card.builtin { opacity: .75; border-style: dashed; }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .badge {
+      font-size: .7rem;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(168,85,247,.2);
+      color: var(--gold);
+    }
+    .badge.lock { background: rgba(255,255,255,.08); color: var(--muted); }
+    label { font-size: .72rem; color: var(--muted); display: block; margin-bottom: 4px; }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.35);
+      color: var(--text);
+      font: inherit;
+      margin-bottom: 10px;
+    }
+    textarea { min-height: 56px; resize: vertical; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .row input[type=checkbox] { width: auto; margin: 0; }
+  .btn-icon {
+      border: none;
+      background: rgba(244,114,182,.15);
+      color: var(--pink);
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      font-size: 1.1rem;
+      cursor: pointer;
+    }
+    .fab {
+      position: fixed;
+      right: 20px;
+      bottom: 88px;
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, var(--violet), var(--pink));
+      color: #fff;
+      font-size: 1.8rem;
+      box-shadow: 0 8px 28px rgba(168,85,247,.5);
+      cursor: pointer;
+    }
+    .save-bar {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+      background: linear-gradient(transparent, var(--bg) 30%);
+      backdrop-filter: blur(12px);
+    }
+    .btn-save {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 16px;
+      font: 700 1rem Outfit, sans-serif;
+      background: linear-gradient(90deg, var(--violet), #7c3aed);
+      color: #fff;
+      cursor: pointer;
+    }
+    .btn-save:disabled { opacity: .5; }
+    .toast {
+      position: fixed;
+      top: 16px; left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 18px;
+      border-radius: 12px;
+      background: rgba(0,0,0,.85);
+      border: 1px solid var(--border);
+      font-size: .85rem;
+      z-index: 99;
+      display: none;
+    }
+    .toast.show { display: block; }
+    .toast.ok { border-color: var(--ok); }
+    .empty { text-align: center; color: var(--muted); padding: 24px; font-size: .9rem; }
+    .loader { text-align: center; padding: 40px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="pig">🐷</div>
+    <div>
+      <h1>Тригеры чата</h1>
+      <p class="sub" id="chatHint">загрузка…</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="loader" class="loader">Сек…</div>
+  <div id="builtinSection" style="display:none">
+    <div class="section-title">Встроенные (только чтение)</div>
+    <div id="builtinList"></div>
+  </div>
+  <div id="customSection" style="display:none">
+    <div class="section-title">Ваши тригеры</div>
+    <div id="customList"></div>
+    <div id="emptyCustom" class="empty" style="display:none">Пока пусто. Жми ＋</div>
+  </div>
+
+  <button type="button" class="fab" id="btnAdd" title="Добавить">+</button>
+  <div class="save-bar">
+    <button type="button" class="btn-save" id="btnSave">Сохранить для всех в чате</button>
+  </div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+tg?.setHeaderColor?.('#0a0614');
+tg?.setBackgroundColor?.('#0a0614');
+
+let custom = [];
+let chatId = null;
+
+function toast(msg, ok) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (ok ? ' ok' : '');
+  setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+function apiHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (tg?.initData) h['Authorization'] = 'tma ' + tg.initData;
+  return h;
+}
+
+function newId() {
+  return 't-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+}
+
+function renderBuiltin(list) {
+  const box = document.getElementById('builtinList');
+  box.innerHTML = '';
+  list.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'card builtin';
+    const words = (r.words || []).join(', ');
+    card.innerHTML = `
+      <div class="card-head"><span class="badge lock">встроенный</span></div>
+      <label>Слова</label><input value="${esc(words)}" disabled />
+      <label>Ответ</label><textarea disabled>${esc(r.response)}</textarea>
+      ${r.once_per_day ? '<div class="row"><span class="badge">1 раз в сутки</span></div>' : ''}
+    `;
+    box.appendChild(card);
+  });
+  document.getElementById('builtinSection').style.display = list.length ? 'block' : 'none';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}
+
+function renderCustom() {
+  const box = document.getElementById('customList');
+  box.innerHTML = '';
+  custom.forEach((r, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.index = i;
+    const words = (r.words || []).join(', ');
+    card.innerHTML = `
+      <div class="card-head">
+        <span class="badge">#${i + 1}</span>
+        <button type="button" class="btn-icon" data-del="${i}">✕</button>
+      </div>
+      <label>Слова (через запятую)</label>
+      <input class="inp-words" value="${esc(words)}" placeholder="да, 300" />
+      <label>Ответ бота</label>
+      <textarea class="inp-response" placeholder="пизда">${esc(r.response)}</textarea>
+      <div class="row">
+        <input type="checkbox" class="inp-daily" ${r.once_per_day ? 'checked' : ''} id="d${i}" />
+        <label for="d${i}" style="margin:0">1 раз в сутки на человека</label>
+      </div>
+    `;
+    box.appendChild(card);
+  });
+  box.querySelectorAll('[data-del]').forEach(btn => {
+    btn.onclick = () => {
+      custom.splice(+btn.dataset.del, 1);
+      renderCustom();
+    };
+  });
+  document.getElementById('emptyCustom').style.display = custom.length ? 'none' : 'block';
+  document.getElementById('customSection').style.display = 'block';
+}
+
+function collectCustom() {
+  const cards = document.querySelectorAll('#customList .card');
+  const out = [];
+  cards.forEach((card, i) => {
+    const words = card.querySelector('.inp-words').value.split(',').map(s => s.trim()).filter(Boolean);
+    const response = card.querySelector('.inp-response').value.trim();
+    const once = card.querySelector('.inp-daily').checked;
+    if (!words.length || !response) return;
+    out.push({
+      id: custom[i]?.id || newId(),
+      words,
+      response,
+      once_per_day: once,
+      match: 'exact',
+    });
+  });
+  return out;
+}
+
+document.getElementById('btnAdd').onclick = () => {
+  custom.push({ id: newId(), words: [''], response: '', once_per_day: false, match: 'exact' });
+  renderCustom();
+};
+
+document.getElementById('btnSave').onclick = async () => {
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true;
+  btn.textContent = 'Сохраняю…';
+  try {
+    const payload = collectCustom();
+    const r = await fetch('/api/triggers', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ chat_id: chatId, triggers: payload }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'ошибка');
+    custom = payload;
+    toast('Сохранено для всех в чате', true);
+    tg?.HapticFeedback?.notificationOccurred('success');
+  } catch (e) {
+    toast(e.message || 'поломался', false);
+    tg?.HapticFeedback?.notificationOccurred('error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Сохранить для всех в чате';
+};
+
+async function load() {
+  try {
+    const q = chatId ? `?chat_id=${chatId}` : '';
+    const r = await fetch('/api/triggers' + q, { headers: apiHeaders() });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'нет доступа');
+    chatId = j.chat_id;
+    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · правки для всех';
+    renderBuiltin(j.builtin || []);
+    custom = j.custom || [];
+    renderCustom();
+    document.getElementById('loader').style.display = 'none';
+  } catch (e) {
+    document.getElementById('loader').textContent = e.message;
+  }
+}
+
+const sp = new URLSearchParams(location.search);
+if (sp.get('chat_id')) chatId = parseInt(sp.get('chat_id'), 10);
+load();
+</script>
+</body>
+</html>

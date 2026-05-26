@@ -8,17 +8,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ChatMemberUpdated, Message
 
+from bot_miniapp import miniapp_keyboard
+from config import settings
 from deps import gpt, store
 from trigger_ai import parse_choice, parse_manage_command, suggest_trigger_replies
 
 router = Router(name="trigger_fsm")
 
-GROUP_GREET = "кидай ссылку Instagram/YouTube — пришлю видео"
-PRIVATE_GREET = (
-    "кидай ссылку Instagram/YouTube — пришлю видео\n\n"
-    "/тригер — настроить слово\n"
-    "/тригеры — список, удалить, изменить"
+GROUP_GREET = (
+    "кидай ссылку Instagram (reel/пост) или YouTube Shorts — пришлю видео\n"
+    "⚙️ /triggers — настройка триггеров"
 )
+PRIVATE_GREET = "кидай ссылку Instagram/YouTube — пришлю видео"
 
 
 class SetupTrigger(StatesGroup):
@@ -39,14 +40,26 @@ async def bot_joined(event: ChatMemberUpdated, bot: Bot) -> None:
         return
     if event.chat.type not in {"group", "supergroup"}:
         return
-    await bot.send_message(event.chat.id, GROUP_GREET)
+    kb = miniapp_keyboard(event.chat.id) if settings.miniapp_url else None
+    privacy = (
+        "\n\n@BotFather → /setprivacy → Disable — иначе в группе не увижу ссылки."
+    )
+    await bot.send_message(event.chat.id, GROUP_GREET + privacy, reply_markup=kb)
 
 
-@router.message(Command("тригер", "trigger"))
+@router.message(Command("trigger"))
 async def cmd_trigger_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    if message.chat.type in {"group", "supergroup"} and settings.miniapp_url:
+        kb = miniapp_keyboard(message.chat.id)
+        await message.answer(
+            "Быстрее через Mini App — все тригеры сразу.\n"
+            "Или ответь сюда одним словом:",
+            reply_markup=kb,
+        )
     await state.set_state(SetupTrigger.word)
-    await message.answer("На какое слово ловить? (одно слово, точное совпадение)")
+    if message.chat.type not in {"group", "supergroup"}:
+        await message.answer("На какое слово ловить? (одно слово, точное совпадение)")
 
 
 @router.message(StateFilter(SetupTrigger.word), F.text)
@@ -93,18 +106,25 @@ async def setup_pick(message: Message, state: FSMContext) -> None:
     await state.clear()
 
 
-@router.message(Command("тригеры", "triggers"))
+@router.message(Command("triggers"))
 async def cmd_list_triggers(message: Message) -> None:
     cid = _chat_id(message)
     lines = store.all_numbered_for_display(cid)
+    kb = None
+    if message.chat.type in {"group", "supergroup"}:
+        kb = miniapp_keyboard(cid)
     if not lines:
-        await message.answer("Пока только встроенные. /тригер — добавить свой.")
+        await message.answer(
+            "Пока только встроенные. /trigger — добавить свой.",
+            reply_markup=kb,
+        )
         return
     tail = (
         "\n\nУдалить: <code>3 удалить</code> или <code>1 2 удалить</code>\n"
-        "Изменить: <code>5 отредактировать</code>"
+        "Изменить: <code>5 отредактировать</code>\n"
+        "Или ⚙️ Тригеры — полное редактирование в Mini App"
     )
-    await message.answer("\n".join(lines) + tail, parse_mode="HTML")
+    await message.answer("\n".join(lines) + tail, parse_mode="HTML", reply_markup=kb)
 
 
 @router.message(F.text.regexp(r"(?i).*(\d+).*(удал|отредакт|редакт|edit)"))
@@ -118,7 +138,7 @@ async def cmd_manage_inline(message: Message, state: FSMContext) -> None:
     cid = _chat_id(message)
     custom = store.load_custom(cid)
     if not custom:
-        await message.answer("Нет своих тригеров. /тригер — добавить.")
+        await message.answer("Нет своих тригеров. /trigger — добавить.")
         return
 
     deletes = [idx for action, idx in parsed if action == "delete"]
@@ -137,7 +157,6 @@ async def cmd_manage_inline(message: Message, state: FSMContext) -> None:
             await message.answer("Нет такого номера.")
             return
         rule = custom[one_based - 1]
-        await state.update_data(edit_index=one_based - 1, word=rule.words[0])
         await state.set_state(SetupTrigger.word)
         await state.update_data(edit_index=one_based - 1, word=rule.words[0])
         await message.answer(

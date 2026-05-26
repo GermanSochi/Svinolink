@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+
+from aiohttp import web
+
+from config import settings
+from deps import store
+from miniapp_auth import parse_init_data
+from store import TriggerRule
+
+logger = logging.getLogger(__name__)
+STATIC = Path(__file__).resolve().parent / "static" / "miniapp"
+
+
+def _init_data_from_request(request: web.Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("tma "):
+        return auth[4:].strip()
+    return request.headers.get("X-Telegram-Init-Data", "") or request.query.get(
+        "initData", ""
+    )
+
+
+def _rules_from_payload(items: list[dict]) -> list[TriggerRule]:
+    rules: list[TriggerRule] = []
+    for i, item in enumerate(items):
+        words_raw = item.get("words") or item.get("word") or ""
+        if isinstance(words_raw, list):
+            words = [str(w).lower().strip() for w in words_raw if str(w).strip()]
+        else:
+            words = [w.strip() for w in str(words_raw).split(",") if w.strip()]
+        response = str(item.get("response", "")).strip()
+        if not words or not response:
+            continue
+        safe = "".join(c for c in words[0] if c.isalnum())[:12] or "w"
+        rules.append(
+            TriggerRule(
+                id=str(item.get("id") or f"t-{int(time.time())}-{i}-{safe}"),
+                words=[w.lower() for w in words],
+                response=response,
+                once_per_day=bool(item.get("once_per_day", False)),
+                match=str(item.get("match") or "exact"),
+            )
+        )
+    return rules
+
+
+async def miniapp_index(_: web.Request) -> web.Response:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    return web.Response(text=html, content_type="text/html")
+
+
+async def api_get_triggers(request: web.Request) -> web.Response:
+    try:
+        init_raw = _init_data_from_request(request)
+        fb = request.query.get("chat_id")
+        fallback = int(fb) if fb and str(fb).lstrip("-").isdigit() else None
+        session = parse_init_data(init_raw, fallback_chat_id=fallback)
+        defaults = store.load_defaults()
+        custom = store.load_custom(session.chat_id)
+        return web.json_response(
+            {
+                "chat_id": session.chat_id,
+                "builtin": [
+                    {
+                        "words": r.words,
+                        "response": r.response,
+                        "once_per_day": r.once_per_day,
+                        "match": r.match,
+                    }
+                    for r in defaults
+                ],
+                "custom": [
+                    {
+                        "id": r.id,
+                        "words": r.words,
+                        "response": r.response,
+                        "once_per_day": r.once_per_day,
+                        "match": r.match,
+                    }
+                    for r in custom
+                ],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_get_triggers: %s", exc)
+        return web.json_response({"error": str(exc)}, status=401)
+
+
+async def api_save_triggers(request: web.Request) -> web.Response:
+    try:
+        init_raw = _init_data_from_request(request)
+        body = await request.json()
+        fb = body.get("chat_id")
+        fallback = int(fb) if fb is not None else None
+        session = parse_init_data(init_raw, fallback_chat_id=fallback)
+        items = body.get("triggers") or body.get("custom") or []
+        if not isinstance(items, list):
+            raise ValueError("неверный формат")
+        rules = _rules_from_payload(items)
+        store.save_custom(session.chat_id, rules)
+        return web.json_response(
+            {
+                "ok": True,
+                "saved": len(rules),
+                "chat_id": session.chat_id,
+                "message": "Сохранено для всех в этом чате",
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_save_triggers: %s", exc)
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+def register_miniapp_routes(app: web.Application) -> None:
+    app.router.add_get("/miniapp", miniapp_index)
+    app.router.add_get("/miniapp/", miniapp_index)
+    app.router.add_get("/api/triggers", api_get_triggers)
+    app.router.add_post("/api/triggers", api_save_triggers)

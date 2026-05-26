@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     yandex_model: str = Field(default="yandexgpt-lite", alias="YANDEX_MODEL")
 
     webhook_base_url: str = Field(default="", alias="WEBHOOK_BASE_URL")
+    public_base_url: str = Field(default="", alias="PUBLIC_BASE_URL")
     webhook_path: str = Field(default="", alias="WEBHOOK_PATH")
     port: int = Field(default=8080, alias="PORT")
 
@@ -39,6 +40,15 @@ class Settings(BaseSettings):
             if part.isdigit():
                 out.add(int(part))
         return out
+
+    @property
+    def app_base_url(self) -> str:
+        return (self.public_base_url or self.webhook_base_url).rstrip("/")
+
+    @property
+    def miniapp_url(self) -> str:
+        base = self.app_base_url
+        return f"{base}/miniapp" if base else ""
 
     @property
     def admin_usernames(self) -> set[str]:
