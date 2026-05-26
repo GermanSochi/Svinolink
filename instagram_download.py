@@ -17,9 +17,10 @@ from instagram_urls import clean_instagram_url, is_instagram_media_url
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_BYTES = 52_428_800  # 50 MiB
-INSTAGRAM_REQUEST_TIMEOUT = 45
-DOWNLOAD_MAX_RETRIES = 3
-DOWNLOAD_RETRY_DELAY_SEC = 2
+INSTAGRAM_REQUEST_TIMEOUT = 15
+DOWNLOAD_MAX_RETRIES = 2
+DOWNLOAD_RETRY_DELAY_SEC = 1.5
+DOWNLOAD_TOTAL_TIMEOUT_SEC = 75
 
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
@@ -74,18 +75,10 @@ def _apply_netscape_cookies(cl, path: Path) -> None:
         raise ValueError(f"файл cookies пустой или неверного формата: {path}")
 
     sessionid = cookie_dict.get("sessionid", "")
-    if sessionid:
-        try:
-            cl.login_by_sessionid(sessionid)
-            logger.info("instagrapi: сессия восстановлена через sessionid (%s)", path)
-            return
-        except Exception as exc:
-            logger.warning("instagrapi login_by_sessionid failed: %s", exc)
-
     jar = _cookie_jar_from_netscape(path)
     cl.private.cookies.update(jar)
     cl.public.cookies.update(jar)
-    cl.settings["cookies"] = requests.utils.dict_from_cookiejar(cl.private.cookies)
+    cl.settings["cookies"] = dict(cookie_dict)
     if sessionid and cookie_dict.get("ds_user_id"):
         cl.authorization_data = {
             "ds_user_id": str(cookie_dict["ds_user_id"]),
@@ -93,11 +86,16 @@ def _apply_netscape_cookies(cl, path: Path) -> None:
             "should_use_header_over_cookies": True,
         }
     cl.init()
-    logger.info("instagrapi: Netscape cookies loaded from %s", path)
+    logger.info("instagrapi: Netscape cookies loaded from %s (user_id=%s)", path, cl.user_id)
 
 
 def _load_cookies_into_client(cl, path: Path) -> None:
     """JSON settings instagrapi или Netscape cookies.txt (как в браузере)."""
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    first = lines[0].strip().lower() if lines else ""
+    if first.startswith("# netscape") or (lines and "\t" in lines[0]):
+        _apply_netscape_cookies(cl, path)
+        return
     try:
         cl.load_settings(path)
         logger.info("instagrapi: settings loaded from %s", path)
@@ -258,22 +256,19 @@ def check_file_size(path: Path) -> None:
 
 
 def _download_instagram_video_once(clean: str) -> Path:
-    from instagrapi.exceptions import ClientError
-
     cl = _get_client()
     if cl.user_id is None and _cookies_file().is_file():
         raise RuntimeError(COOKIES_EXPIRED_MSG)
 
     media_pk = cl.media_pk_from_url(clean)
     folder = _downloads_dir()
-    info = cl.media_info(media_pk)
-
-    if info.media_type != 2 or not info.video_url:
-        raise ValueError("в посте нет видео (только фото)")
 
     try:
         raw_path = cl.clip_download(media_pk, folder=folder)
-    except Exception:
+    except Exception as exc:
+        if _is_timeout_error(exc):
+            raise
+        logger.info("clip_download failed, trying video_download: %s", exc)
         raw_path = cl.video_download(media_pk, folder=folder)
 
     dest = _dest_path()

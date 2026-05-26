@@ -74,7 +74,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             chat_type=message.chat.type,
         )
 
-        from instagram_download import download_instagram_video, remove_file
+        from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file
         from instagram_urls import is_instagram_media_url
 
         clean_url = url_from_message(message)
@@ -86,7 +86,10 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             )
 
         logger.info("IG clean_url=%s", clean_url)
-        file_path = await asyncio.to_thread(download_instagram_video, clean_url)
+        file_path = await asyncio.wait_for(
+            asyncio.to_thread(download_instagram_video, clean_url),
+            timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+        )
 
         size = os.path.getsize(file_path)
         if size > TELEGRAM_MAX_BYTES:
@@ -98,7 +101,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             )
             return
 
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 await message.answer_video(
@@ -119,6 +122,11 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                     await asyncio.sleep(2)
                     continue
                 raise
+    except asyncio.TimeoutError:
+        logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
+        await message.answer(
+            "❌ Instagram слишком долго не отвечает. Отправь ссылку ещё раз."
+        )
     except Exception as e:
         logger.error("instagram handler error: %s", e, exc_info=True)
         err_text = str(e)
