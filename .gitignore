@@ -9,3 +9,4 @@ downloads/
 bot.log
 bot.err.log
 *.mp4
+test_db.py

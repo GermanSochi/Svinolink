@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 import asyncpg
 
@@ -28,6 +29,36 @@ ON chat_history (chat_id, created_at DESC);
 """
 
 
+def normalize_database_url(raw: str) -> str:
+    """Корректно обрабатывает % и %25 в пароле PostgreSQL URI."""
+    raw = raw.strip()
+    if not raw:
+        return raw
+    parsed = urlparse(raw)
+    if not parsed.scheme.startswith("postgres") or not parsed.username:
+        return raw
+    password = unquote(parsed.password or "", encoding="utf-8", errors="replace")
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    user = quote(parsed.username, safe="")
+    pwd = quote(password, safe="")
+    netloc = f"{user}:{pwd}@{host}{port}"
+    return urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def database_url() -> str:
+    return normalize_database_url(settings.supabase_database_url)
+
+
 def is_memory_enabled() -> bool:
     return bool(settings.supabase_database_url.strip())
 
@@ -35,7 +66,7 @@ def is_memory_enabled() -> bool:
 async def init_chat_memory() -> None:
     """Создаёт таблицу chat_history и пул подключений к Supabase PostgreSQL."""
     global _pool
-    url = settings.supabase_database_url.strip()
+    url = database_url()
     if not url:
         logger.warning("SUPABASE_DATABASE_URL не задан — память чата отключена")
         return
@@ -51,6 +82,30 @@ async def init_chat_memory() -> None:
         await conn.execute(CREATE_TABLE_SQL)
         await conn.execute(CREATE_INDEX_SQL)
     logger.info("Supabase chat_history ready")
+
+
+async def check_connection(url: str | None = None) -> tuple[bool, str]:
+    """SELECT 1 + проверка таблицы chat_history. Для health/test."""
+    raw = (url or settings.supabase_database_url).strip()
+    dsn = normalize_database_url(raw)
+    if not dsn:
+        return False, "SUPABASE_DATABASE_URL not set"
+
+    conn = await asyncpg.connect(dsn, timeout=20, statement_cache_size=0)
+    try:
+        ping = await conn.fetchval("SELECT 1")
+        if ping != 1:
+            return False, f"unexpected SELECT 1 result: {ping!r}"
+
+        table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
+        if table is None:
+            await conn.execute(CREATE_TABLE_SQL)
+            await conn.execute(CREATE_INDEX_SQL)
+            table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
+
+        return True, f"chat_history={table}"
+    finally:
+        await conn.close()
 
 
 async def close_chat_memory() -> None:

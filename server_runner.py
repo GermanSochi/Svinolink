@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from bot_startup import configure_bot
-from chat_memory import init_chat_memory
+from chat_memory import check_connection, init_chat_memory
 from config import settings
 from instagram_download import init_instagram_downloader
 from webapp_server import STATIC, register_miniapp_routes
@@ -62,8 +62,23 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             content_type="application/json",
         )
 
+    async def health_db(_: web.Request) -> web.Response:
+        if not settings.supabase_database_url.strip():
+            payload = {"ok": False, "detail": "SUPABASE_DATABASE_URL not set"}
+        else:
+            try:
+                ok, detail = await check_connection()
+                payload = {"ok": ok, "detail": detail}
+            except Exception as exc:
+                payload = {"ok": False, "detail": str(exc)}
+        return web.Response(
+            text=json.dumps(payload, ensure_ascii=False),
+            content_type="application/json",
+        )
+
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/health/db", health_db)
     register_miniapp_routes(app)
 
     if webhook:
