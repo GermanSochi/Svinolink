@@ -4,4 +4,6 @@ __pycache__/
 .env
 .env.*
 data/
+bot.log
+bot.err.log
 *.mp4
