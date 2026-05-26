@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
@@ -13,21 +12,24 @@ import ai_quota
 from config import settings
 from deps import gpt, store
 from message_urls import message_has_instagram_link, url_from_message
-from yandex_gpt import YandexGPTError
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
 
 CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
-_SVIN_RE = re.compile(r"(?i)(?<![а-яё])свин(?![а-яё])")
 _SVIN_LIMIT_MSG = (
     "🐷 Хватит дрочить свинью! У тебя закончился лимит: "
     "доступно только 2 вопроса в час."
 )
-_SVIN_SYSTEM = (
-    "Ты Svinolink — дерзкий бот в мужском чате друзей. "
-    "Отвечай коротко, по делу, можно мат. Не упоминай код и админов."
+
+SVIN_AI_FILTER = (
+    StateFilter(None),
+    F.text,
+    ~F.text.startswith("/"),
+    F.chat.type.in_({"group", "supergroup"}),
+    ~F.text.regexp(r"(?i)instagram\.com"),
+    F.text.regexp(r"(?i)(свин|свинья)"),
 )
 
 
@@ -50,10 +52,6 @@ def is_admin_user(user_id: int, username: str | None) -> bool:
     if username and username.lower().lstrip("@") in settings.admin_usernames:
         return True
     return False
-
-
-def contains_svin(text: str) -> bool:
-    return bool(_SVIN_RE.search(text))
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
@@ -122,31 +120,27 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 pass
 
 
-@router.message(
-    StateFilter(None),
-    F.text,
-    ~F.text.startswith("/"),
-    F.chat.type.in_({"group", "supergroup"}),
-)
 async def handle_svin_ai(message: Message, bot: Bot) -> None:
-    if message_has_instagram_link(message):
-        return
-    if not message.from_user or not message.text:
-        return
-    if not contains_svin(message.text):
-        return
-
-    uid = message.from_user.id
-    if not ai_quota.can_ask(uid):
-        await message.reply(_SVIN_LIMIT_MSG)
-        return
-
     try:
-        answer = await gpt.reply(message.text, system=_SVIN_SYSTEM)
+        if not message.from_user or not message.text:
+            return
+
+        uid = message.from_user.id
+        logger.info(
+            "svin_ai chat=%s user=%s text=%r",
+            message.chat.id,
+            uid,
+            message.text[:200],
+        )
+
+        if not ai_quota.can_ask(uid):
+            await message.reply(_SVIN_LIMIT_MSG)
+            return
+
+        answer = await gpt.reply(message.text)
         ai_quota.record(uid)
         left = ai_quota.remaining(uid)
-        await message.reply(f"{answer}\n\n(У тебя осталось вопросов: {left} в час)")
-    except YandexGPTError:
-        await message.reply(
-            "Сейчас не могу ответить. Кидай Instagram — видео скину без лимитов."
-        )
+        await message.reply(f"{answer}\n\n(Осталось вопросов: {left} в час)")
+    except Exception as e:
+        logger.error("svin_ai error: %s", e, exc_info=True)
+        await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(e)}")

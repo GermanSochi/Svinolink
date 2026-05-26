@@ -10,7 +10,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
 from admin_panel import router as admin_router
-from chat_handlers import IG_LINK_FILTER, handle_instagram_link, router as chat_router
+from chat_handlers import (
+    IG_LINK_FILTER,
+    SVIN_AI_FILTER,
+    handle_instagram_link,
+    handle_svin_ai,
+    router as chat_router,
+)
 from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
@@ -62,6 +68,7 @@ def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
+    dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
     dp.include_router(trigger_router)
     dp.include_router(chat_router)
     dp.include_router(admin_router)
