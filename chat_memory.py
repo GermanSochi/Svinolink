@@ -40,7 +40,7 @@ class PgParams:
 
 
 def parse_postgres_url(raw: str) -> PgParams:
-    """Парсит URI через rfind('@') — пароль может содержать @, :, %."""
+    """Парсит URI через rfind('@') — пароль может содержать @, :, /, %."""
     url = raw.strip()
     for prefix in ("postgresql://", "postgres://"):
         if url.startswith(prefix):
@@ -52,19 +52,19 @@ def parse_postgres_url(raw: str) -> PgParams:
     if "?" in rest:
         rest = rest.split("?", 1)[0]
 
-    if "/" in rest:
-        hostpart, dbname = rest.rsplit("/", 1)
-        database = dbname or "postgres"
-    else:
-        hostpart = rest
-        database = "postgres"
-
-    at = hostpart.rfind("@")
+    at = rest.rfind("@")
     if at == -1:
         raise ValueError("в URL нет @ между паролем и хостом")
 
-    userinfo = hostpart[:at]
-    hostport = hostpart[at + 1 :]
+    userinfo = rest[:at]
+    hostdb = rest[at + 1 :]
+
+    if "/" in hostdb:
+        hostport, dbname = hostdb.split("/", 1)
+        database = dbname or "postgres"
+    else:
+        hostport = hostdb
+        database = "postgres"
 
     colon = userinfo.find(":")
     if colon == -1:
