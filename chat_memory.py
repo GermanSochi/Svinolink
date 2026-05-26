@@ -75,10 +75,15 @@ def parse_postgres_url(raw: str) -> PgParams:
 
     if ":" in hostport:
         host, port_raw = hostport.rsplit(":", 1)
-        port = int(port_raw)
+        if not port_raw:
+            port = 6543 if "supabase.com" in host else 5432
+        elif not port_raw.isdigit():
+            raise ValueError(f"неверный порт в URL: {hostport!r}")
+        else:
+            port = int(port_raw)
     else:
         host = hostport
-        port = 5432
+        port = 6543 if "supabase.com" in hostport else 5432
 
     return PgParams(user=user, password=password, host=host, port=port, database=database)
 
