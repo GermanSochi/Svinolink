@@ -51,11 +51,20 @@ class TriggerStore:
                     chat_type TEXT NOT NULL DEFAULT 'group',
                     active INTEGER NOT NULL DEFAULT 1,
                     first_seen REAL NOT NULL,
-                    last_seen REAL NOT NULL
+                    last_seen REAL NOT NULL,
+                    added_by_user_id INTEGER
                 )
                 """
             )
+            self._ensure_chat_columns(conn)
         self._sync_chats_from_disk()
+
+    def _ensure_chat_columns(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(known_chats)")}
+        if "added_by_user_id" not in cols:
+            conn.execute(
+                "ALTER TABLE known_chats ADD COLUMN added_by_user_id INTEGER"
+            )
 
     def _chat_path(self, chat_id: int) -> Path:
         return settings.data_dir / "chats" / f"{chat_id}.json"
@@ -194,14 +203,17 @@ class TriggerStore:
         chat_type: str = "group",
         *,
         active: bool = True,
+        added_by_user_id: int | None = None,
     ) -> None:
         now = time.time()
         safe_title = (title or "").strip()
         with sqlite3.connect(self._db) as conn:
             conn.execute(
                 """
-                INSERT INTO known_chats (chat_id, title, chat_type, active, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO known_chats (
+                    chat_id, title, chat_type, active, first_seen, last_seen, added_by_user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     title=CASE
                         WHEN excluded.title != '' THEN excluded.title
@@ -209,9 +221,21 @@ class TriggerStore:
                     END,
                     chat_type=excluded.chat_type,
                     active=excluded.active,
-                    last_seen=excluded.last_seen
+                    last_seen=excluded.last_seen,
+                    added_by_user_id=COALESCE(
+                        excluded.added_by_user_id,
+                        known_chats.added_by_user_id
+                    )
                 """,
-                (chat_id, safe_title, chat_type, 1 if active else 0, now, now),
+                (
+                    chat_id,
+                    safe_title,
+                    chat_type,
+                    1 if active else 0,
+                    now,
+                    now,
+                    added_by_user_id,
+                ),
             )
 
     def deactivate_chat(self, chat_id: int) -> None:
@@ -234,14 +258,19 @@ class TriggerStore:
         with sqlite3.connect(self._db) as conn:
             rows = conn.execute(
                 """
-                SELECT chat_id, title, chat_type
+                SELECT chat_id, title, chat_type, added_by_user_id
                 FROM known_chats
                 WHERE active=1
                 ORDER BY last_seen DESC
                 """
             ).fetchall()
         return [
-            {"chat_id": int(r[0]), "title": str(r[1] or ""), "chat_type": str(r[2])}
+            {
+                "chat_id": int(r[0]),
+                "title": str(r[1] or ""),
+                "chat_type": str(r[2]),
+                "added_by_user_id": int(r[3]) if r[3] is not None else None,
+            }
             for r in rows
         ]
 

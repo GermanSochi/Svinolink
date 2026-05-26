@@ -48,7 +48,7 @@ def parse_init_data(init_data: str, *, fallback_chat_id: int | None = None) -> W
             chat_id = int(raw[5:])
 
     if chat_id is None:
-        raise ValueError("нет chat_id — открой /triggers в групповом чате")
+        raise ValueError("выбери группу в Mini App из лички бота")
 
     return WebAppSession(
         user_id=parsed.user.id,

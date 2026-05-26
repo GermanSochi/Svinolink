@@ -130,25 +130,9 @@ async def api_list_chats(request: web.Request) -> web.Response:
                 {
                     "chat_id": cid,
                     "title": chat["title"] or f"Чат {cid}",
-                    "builtin": [
-                        {
-                            "words": r.words,
-                            "response": r.response,
-                            "once_per_day": r.once_per_day,
-                        }
-                        for r in defaults
-                    ],
-                    "custom": [
-                        {
-                            "id": r.id,
-                            "words": r.words,
-                            "response": r.response,
-                            "once_per_day": r.once_per_day,
-                            "added_by_username": r.added_by_username,
-                            "added_by_user_id": r.added_by_user_id,
-                        }
-                        for r in custom
-                    ],
+                    "builtin_count": len(defaults),
+                    "custom_count": len(custom),
+                    "added_by_user_id": chat.get("added_by_user_id"),
                 }
             )
         return web.json_response({"chats": payload})

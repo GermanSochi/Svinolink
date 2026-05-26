@@ -3,7 +3,13 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot
-from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
+from aiogram.types import (
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    MenuButtonWebApp,
+    WebAppInfo,
+)
 
 from config import settings
 
@@ -11,22 +17,23 @@ logger = logging.getLogger(__name__)
 
 
 async def configure_bot(bot: Bot) -> None:
-    await bot.set_my_commands(
-        [
-            BotCommand(
-                command="triggers",
-                description="Настройка и редактирование триггеров чата",
-            ),
-        ]
-    )
+    for scope in (
+        BotCommandScopeDefault(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllPrivateChats(),
+    ):
+        await bot.delete_my_commands(scope=scope)
 
     url = settings.miniapp_url
     if url:
         try:
             await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(text="⚙️ Тригеры", web_app=WebAppInfo(url=url))
+                menu_button=MenuButtonWebApp(
+                    text="⚙️ Триггеры",
+                    web_app=WebAppInfo(url=url),
+                )
             )
-            logger.info("Menu WebApp: %s", url)
+            logger.info("Menu WebApp (личка): %s", url)
         except Exception as exc:
             logger.warning("Menu WebApp failed: %s", exc)
     else:

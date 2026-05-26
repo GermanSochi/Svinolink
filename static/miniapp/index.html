@@ -144,16 +144,37 @@
     .pick-btn {
       width: 100%;
       text-align: left;
-      padding: 14px;
-      margin-bottom: 8px;
-      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 10px;
+      border-radius: 16px;
       border: 1px solid var(--border);
-      background: var(--card);
+      background: linear-gradient(135deg, rgba(168,85,247,.12), rgba(244,114,182,.08));
       color: var(--text);
       font: inherit;
       cursor: pointer;
+      transition: transform .15s, border-color .15s;
     }
-    .pick-btn small { display: block; color: var(--muted); margin-top: 4px; font-size: .78rem; }
+    .pick-btn:active { transform: scale(.98); }
+    .pick-btn strong { display: block; font-size: 1rem; margin-bottom: 6px; }
+    .pick-btn small { display: block; color: var(--muted); font-size: .78rem; line-height: 1.4; }
+    .pick-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .pick-meta span {
+      font-size: .68rem;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: var(--gold);
+    }
+    .btn-back {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 8px 12px;
+      font: 600 .8rem Outfit, sans-serif;
+      cursor: pointer;
+      margin-bottom: 12px;
+    }
     .author { font-size: .72rem; color: var(--muted); margin-bottom: 8px; }
   </style>
 </head>
@@ -161,15 +182,17 @@
   <div class="header">
     <div class="pig">🐷</div>
     <div>
-      <h1>Тригеры чата</h1>
+      <h1 id="pageTitle">Триггеры</h1>
       <p class="sub" id="chatHint">загрузка…</p>
     </div>
   </div>
 
+  <button type="button" class="btn-back" id="btnBack" style="display:none">← Все группы</button>
+
   <div id="toast" class="toast"></div>
   <div id="loader" class="loader">Сек…</div>
   <div id="pickerSection" style="display:none">
-    <div class="section-title">Выбери группу</div>
+    <div class="section-title">Группы, где стоит Svinolink</div>
     <div id="pickerList"></div>
   </div>
   <div id="builtinSection" style="display:none">
@@ -200,14 +223,8 @@ let chatId = null;
 function resolveChatId() {
   const sp = new URLSearchParams(location.search);
   const fromUrl = sp.get('chat_id');
-  if (fromUrl && /^-?\d+$/.test(fromUrl)) {
+  if (fromUrl && /^-\d+$/.test(fromUrl)) {
     return parseInt(fromUrl, 10);
-  }
-  const unsafe = tg?.initDataUnsafe;
-  if (unsafe?.chat?.id) return unsafe.chat.id;
-  if (unsafe?.start_param?.startsWith('chat_')) {
-    const raw = unsafe.start_param.slice(5);
-    if (/^-?\d+$/.test(raw)) return parseInt(raw, 10);
   }
   return null;
 }
@@ -372,35 +389,70 @@ function showEditor() {
   document.querySelector('.save-bar').style.display = 'block';
 }
 
+async function loadPicker() {
+  document.getElementById('pageTitle').textContent = 'Триггеры';
+  document.getElementById('btnBack').style.display = 'none';
+  const r = await fetch('/api/chats', { headers: apiHeaders() });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'нет доступа');
+  await renderPicker(j.chats || []);
+}
+
 async function renderPicker(chats) {
   hideEditor();
   const box = document.getElementById('pickerList');
   box.innerHTML = '';
   if (!chats.length) {
-    box.innerHTML = '<div class="empty">Нет групп. Добавь бота в чат и напиши там /triggers</div>';
+    box.innerHTML = '<div class="empty">🐷 Пока нет групп.<br>Добавь бота в чат — он появится здесь.</div>';
   } else {
     chats.forEach(c => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pick-btn';
-      const customN = (c.custom || []).length;
-      btn.innerHTML = `<strong>${esc(c.title || ('Чат ' + c.chat_id))}</strong><small>своих триггеров: ${customN}</small>`;
-      btn.onclick = () => {
-        chatId = c.chat_id;
-        const url = new URL(location.href);
-        url.searchParams.set('chat_id', String(chatId));
-        history.replaceState({}, '', url);
-        document.getElementById('pickerSection').style.display = 'none';
-        showEditor();
-        loadTriggersForChat();
-      };
+      const title = c.title || ('Чат ' + c.chat_id);
+      const builtin = c.builtin_count ?? 2;
+      const customN = c.custom_count ?? (c.custom || []).length ?? 0;
+      btn.innerHTML = `
+        <strong>💬 ${esc(title)}</strong>
+        <small>Нажми, чтобы настроить триггеры для всех в чате</small>
+        <div class="pick-meta">
+          <span>системных: ${builtin}</span>
+          <span>своих: ${customN}</span>
+        </div>`;
+      btn.onclick = () => openChat(c.chat_id, title);
       box.appendChild(btn);
     });
   }
   document.getElementById('pickerSection').style.display = 'block';
   document.getElementById('loader').style.display = 'none';
-  document.getElementById('chatHint').textContent = 'Выбери группу для настройки';
+  document.getElementById('chatHint').textContent = `${chats.length} групп · выбери чат`;
 }
+
+function openChat(id, title) {
+  chatId = id;
+  const url = new URL(location.href);
+  url.searchParams.set('chat_id', String(chatId));
+  history.replaceState({}, '', url);
+  document.getElementById('pickerSection').style.display = 'none';
+  document.getElementById('pageTitle').textContent = title || ('Чат ' + id);
+  document.getElementById('btnBack').style.display = 'inline-block';
+  showEditor();
+  loadTriggersForChat();
+}
+
+document.getElementById('btnBack').onclick = async () => {
+  chatId = null;
+  const url = new URL(location.href);
+  url.searchParams.delete('chat_id');
+  history.replaceState({}, '', url);
+  document.getElementById('loader').style.display = 'block';
+  document.getElementById('loader').textContent = 'Сек…';
+  try {
+    await loadPicker();
+  } catch (e) {
+    document.getElementById('loader').textContent = e.message || 'ошибка';
+  }
+};
 
 async function loadTriggersForChat() {
   const loader = document.getElementById('loader');
@@ -411,7 +463,8 @@ async function loadTriggersForChat() {
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || 'нет доступа');
   chatId = j.chat_id;
-  document.getElementById('chatHint').textContent = (j.title || ('Чат ' + chatId)) + ' · правки для всех';
+  document.getElementById('chatHint').textContent = (j.title || ('Чат ' + chatId)) + ' · для всех в чате';
+  document.getElementById('pageTitle').textContent = j.title || ('Чат ' + chatId);
   renderBuiltin(j.builtin || []);
   custom = j.custom || [];
   renderCustom();
@@ -428,15 +481,14 @@ async function load() {
 
     chatId = resolveChatId();
     if (chatId == null) {
-      document.getElementById('chatHint').textContent = 'Группы бота';
-      const r = await fetch('/api/chats', { headers: apiHeaders() });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'нет доступа');
-      await renderPicker(j.chats || []);
+      document.getElementById('chatHint').textContent = 'Загрузка групп…';
+      await loadPicker();
       return;
     }
 
-    document.getElementById('chatHint').textContent = 'Чат ' + chatId + ' · загрузка…';
+    document.getElementById('pageTitle').textContent = 'Чат ' + chatId;
+    document.getElementById('btnBack').style.display = 'inline-block';
+    document.getElementById('chatHint').textContent = 'загрузка…';
     showEditor();
     await loadTriggersForChat();
   } catch (e) {

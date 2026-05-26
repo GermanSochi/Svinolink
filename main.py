@@ -15,7 +15,7 @@ from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
 from server_runner import run_polling_with_http, run_webhook_mode
-from trigger_fsm import PRIVATE_GREET, router as trigger_router, send_private_triggers_menu
+from trigger_fsm import PRIVATE_GREET, router as trigger_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,16 +55,7 @@ async def handle_triggers(message: Message, bot: Bot) -> None:
 
 
 async def cmd_start(message: Message, bot: Bot) -> None:
-    from bot_miniapp import miniapp_keyboard
-    from trigger_fsm import GROUP_GREET
-
-    if message.chat.type == "private":
-        await bot.send_message(message.chat.id, PRIVATE_GREET)
-        await send_private_triggers_menu(message)
-        return
-    kb = miniapp_keyboard(message.chat.id) if settings.miniapp_url else None
-    short = GROUP_GREET
-    await bot.send_message(message.chat.id, short, reply_markup=kb)
+    await bot.send_message(message.chat.id, PRIVATE_GREET)
 
 
 def _build_dispatcher() -> Dispatcher:
@@ -75,7 +66,7 @@ def _build_dispatcher() -> Dispatcher:
     dp.include_router(chat_router)
     dp.include_router(admin_router)
 
-    dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_start, CommandStart(), F.chat.type == "private")
     dp.message.register(
         handle_triggers,
         StateFilter(None),
