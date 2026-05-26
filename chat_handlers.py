@@ -55,6 +55,7 @@ def is_wake_message(message: Message) -> bool:
 @router.message(StateFilter(None), InstagramLinkFilter())
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
     text = message.text or message.caption or ""
+    print(f"ПОЛУЧЕНО СООБЩЕНИЕ ИЗ ГРУППЫ: {text}")
     logger.info(
         "instagram_handler chat=%s type=%s text=%r",
         message.chat.id,

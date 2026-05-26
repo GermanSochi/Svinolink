@@ -23,7 +23,7 @@ async def apply_webhook(bot: Bot) -> str:
     await bot.set_webhook(
         url=url,
         drop_pending_updates=True,
-        allowed_updates=["message", "my_chat_member"],
+        allowed_updates=["message", "edited_message", "channel_post", "callback_query", "my_chat_member"],
     )
     info = await bot.get_webhook_info()
     logger.info(
