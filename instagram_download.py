@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import time
 import uuid
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
@@ -16,6 +17,9 @@ from instagram_urls import clean_instagram_url, is_instagram_media_url
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_BYTES = 52_428_800  # 50 MiB
+INSTAGRAM_REQUEST_TIMEOUT = 45
+DOWNLOAD_MAX_RETRIES = 3
+DOWNLOAD_RETRY_DELAY_SEC = 2
 
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
@@ -101,17 +105,22 @@ def _load_cookies_into_client(cl, path: Path) -> None:
         _apply_netscape_cookies(cl, path)
 
 
+def _new_instagram_client():
+    from instagrapi import Client
+
+    return Client(request_timeout=INSTAGRAM_REQUEST_TIMEOUT)
+
+
 def _build_client():
     """Синхронная инициализация instagrapi — вызывается один раз при старте."""
     global _client, _ready, _cookies_loaded
-    from instagrapi import Client
 
     with _client_lock:
         if _client is not None:
             _ready = True
             return _client
 
-        cl = Client()
+        cl = _new_instagram_client()
         cookies_path = _cookies_file()
         session_file = settings.instagram_session_file
         user = settings.instagram_username.strip()
@@ -131,7 +140,9 @@ def _build_client():
                 logger.info("instagrapi: settings loaded from %s", session_file)
             except Exception as exc:
                 logger.warning("instagrapi session load failed: %s", exc)
-                cl = Client()
+                cl = _new_instagram_client()
+
+        cl.request_timeout = INSTAGRAM_REQUEST_TIMEOUT
 
         if not _cookies_loaded and user and password:
             try:
@@ -171,6 +182,13 @@ def _get_client():
 
 def _dest_path() -> Path:
     return _downloads_dir() / f"{uuid.uuid4().hex}.mp4"
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    msg = str(exc).lower()
+    return "timeout" in msg or "timed out" in msg
 
 
 def _is_session_error(exc: Exception) -> bool:
@@ -218,6 +236,11 @@ def _is_block_or_network_error(exc: Exception) -> bool:
 
 
 def _runtime_error_for(exc: Exception) -> RuntimeError:
+    if _is_timeout_error(exc):
+        return RuntimeError(
+            "❌ Instagram не ответил вовремя после нескольких попыток. "
+            "Отправь ссылку ещё раз."
+        )
     if _is_session_error(exc):
         return RuntimeError(COOKIES_EXPIRED_MSG)
     if _cookies_loaded and _is_block_or_network_error(exc):
@@ -234,6 +257,32 @@ def check_file_size(path: Path) -> None:
         raise ValueError(TOO_LARGE_MSG)
 
 
+def _download_instagram_video_once(clean: str) -> Path:
+    from instagrapi.exceptions import ClientError
+
+    cl = _get_client()
+    if cl.user_id is None and _cookies_file().is_file():
+        raise RuntimeError(COOKIES_EXPIRED_MSG)
+
+    media_pk = cl.media_pk_from_url(clean)
+    folder = _downloads_dir()
+    info = cl.media_info(media_pk)
+
+    if info.media_type != 2 or not info.video_url:
+        raise ValueError("в посте нет видео (только фото)")
+
+    try:
+        raw_path = cl.clip_download(media_pk, folder=folder)
+    except Exception:
+        raw_path = cl.video_download(media_pk, folder=folder)
+
+    dest = _dest_path()
+    shutil.copy2(raw_path, dest)
+    check_file_size(dest)
+    logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
+    return dest
+
+
 def download_instagram_video(url: str) -> Path:
     """
     Скачивание Reel через instagrapi (экосистема subzeroid).
@@ -245,39 +294,46 @@ def download_instagram_video(url: str) -> Path:
 
     from instagrapi.exceptions import ClientError
 
-    try:
-        cl = _get_client()
-        if cl.user_id is None and _cookies_file().is_file():
-            raise RuntimeError(COOKIES_EXPIRED_MSG)
-
-        media_pk = cl.media_pk_from_url(clean)
-        folder = _downloads_dir()
-        info = cl.media_info(media_pk)
-
-        if info.media_type != 2 or not info.video_url:
-            raise ValueError("в посте нет видео (только фото)")
-
+    last_exc: Exception | None = None
+    for attempt in range(DOWNLOAD_MAX_RETRIES):
         try:
-            raw_path = cl.clip_download(media_pk, folder=folder)
-        except Exception:
-            raw_path = cl.video_download(media_pk, folder=folder)
+            return _download_instagram_video_once(clean)
+        except ValueError:
+            raise
+        except RuntimeError:
+            raise
+        except ClientError as exc:
+            last_exc = exc
+            if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
+                logger.warning(
+                    "instagrapi timeout attempt %s/%s for %s: %s",
+                    attempt + 1,
+                    DOWNLOAD_MAX_RETRIES,
+                    clean,
+                    exc,
+                )
+                time.sleep(DOWNLOAD_RETRY_DELAY_SEC)
+                continue
+            logger.error("instagrapi ClientError %s: %s", clean, exc, exc_info=True)
+            raise _runtime_error_for(exc) from exc
+        except Exception as exc:
+            last_exc = exc
+            if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
+                logger.warning(
+                    "instagrapi timeout attempt %s/%s for %s: %s",
+                    attempt + 1,
+                    DOWNLOAD_MAX_RETRIES,
+                    clean,
+                    exc,
+                )
+                time.sleep(DOWNLOAD_RETRY_DELAY_SEC)
+                continue
+            logger.error("instagrapi failed %s: %s", clean, exc, exc_info=True)
+            raise _runtime_error_for(exc) from exc
 
-        dest = _dest_path()
-        shutil.copy2(raw_path, dest)
-        check_file_size(dest)
-        logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
-        return dest
-
-    except ValueError:
-        raise
-    except RuntimeError:
-        raise
-    except ClientError as exc:
-        logger.error("instagrapi ClientError %s: %s", clean, exc, exc_info=True)
-        raise _runtime_error_for(exc) from exc
-    except Exception as exc:
-        logger.error("instagrapi failed %s: %s", clean, exc, exc_info=True)
-        raise _runtime_error_for(exc) from exc
+    if last_exc is not None:
+        raise _runtime_error_for(last_exc)
+    raise RuntimeError("❌ Не удалось скачать видео с Instagram")
 
 
 def remove_file(path: Path | None) -> None:

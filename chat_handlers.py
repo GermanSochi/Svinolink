@@ -98,12 +98,27 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             )
             return
 
-        await message.answer_video(
-            video=FSInputFile(file_path),
-            caption=CAPTION,
-            reply_to_message_id=message.message_id,
-            supports_streaming=True,
-        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await message.answer_video(
+                    video=FSInputFile(file_path),
+                    caption=CAPTION,
+                    reply_to_message_id=message.message_id,
+                    supports_streaming=True,
+                )
+                break
+            except Exception as e:
+                if "timeout" in str(e).lower() and attempt < max_retries - 1:
+                    logger.warning(
+                        "telegram upload timeout attempt %s/%s: %s",
+                        attempt + 1,
+                        max_retries,
+                        e,
+                    )
+                    await asyncio.sleep(2)
+                    continue
+                raise
     except Exception as e:
         logger.error("instagram handler error: %s", e, exc_info=True)
         err_text = str(e)
