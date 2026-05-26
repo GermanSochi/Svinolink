@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
-HOURLY_LIMIT = 2
+HOURLY_LIMIT = 30
 WINDOW_SECONDS = 3600
 
 _timestamps: dict[int, list[float]] = defaultdict(list)

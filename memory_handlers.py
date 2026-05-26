@@ -70,10 +70,7 @@ async def handle_yesterday_recap(message: Message, bot: Bot) -> None:
 
         uid = message.from_user.id
         if not ai_quota.can_ask(uid):
-            await message.reply(
-                "🐷 Хватит дрочить свинью! У тебя закончился лимит: "
-                "доступно только 2 вопроса в час."
-            )
+            await message.reply(ai_quota.limit_exceeded_message())
             return
 
         rows = await fetch_last_24h(message.chat.id)

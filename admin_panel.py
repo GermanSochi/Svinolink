@@ -39,7 +39,12 @@ async def cmd_admin_stats(message: Message) -> None:
     with sqlite3.connect(db) as conn:
       row = conn.execute("SELECT COUNT(*) FROM riddle WHERE solved=1").fetchone()
       solved = int(row[0]) if row else 0
-  await message.answer(f"Разгадали загадку: {solved} чел.\nИИ «свин»: 2 вопроса/час на человека.")
+  from ai_quota import HOURLY_LIMIT
+
+  await message.answer(
+    f"Разгадали загадку: {solved} чел.\n"
+    f"ИИ «свин»: {HOURLY_LIMIT} вопросов/час на человека."
+  )
 
 
 @router.message(Command("admin_reset"), F.chat.type == "private")

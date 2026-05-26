@@ -18,10 +18,6 @@ router = Router(name="chat_handlers")
 
 CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
-_SVIN_LIMIT_MSG = (
-    "🐷 Хватит дрочить свинью! У тебя закончился лимит: "
-    "доступно только 2 вопроса в час."
-)
 
 SVIN_AI_FILTER = (
     StateFilter(None),
