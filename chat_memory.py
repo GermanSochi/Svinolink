@@ -170,7 +170,16 @@ async def init_chat_memory() -> None:
         return
 
     try:
-        _pool = await _open_pool(url)
+        try:
+            conn = await asyncpg.connect(
+                url, timeout=20, statement_cache_size=0, ssl="require"
+            )
+            await conn.close()
+            _pool = await asyncpg.create_pool(
+                url, min_size=1, max_size=4, ssl="require", statement_cache_size=0
+            )
+        except Exception:
+            _pool = await _open_pool(url)
         async with _pool.acquire() as conn:
             await conn.execute(CREATE_TABLE_SQL)
             await conn.execute(CREATE_INDEX_SQL)
@@ -184,30 +193,52 @@ async def init_chat_memory() -> None:
         )
 
 
+async def _ping_connection(conn: asyncpg.Connection) -> tuple[bool, str]:
+    ping = await conn.fetchval("SELECT 1")
+    if ping != 1:
+        return False, f"unexpected SELECT 1 result: {ping!r}"
+
+    table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
+    if table is None:
+        await conn.execute(CREATE_TABLE_SQL)
+        await conn.execute(CREATE_INDEX_SQL)
+        table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
+
+    return True, f"chat_history={table}"
+
+
 async def check_connection(url: str | None = None) -> tuple[bool, str]:
     """SELECT 1 + проверка таблицы chat_history. Для health/test."""
     raw = (url or settings.supabase_database_url).strip()
     if not raw:
         return False, "SUPABASE_DATABASE_URL not set"
 
+    errors: list[str] = []
+
     try:
-        conn = await _connect_once(raw)
+        conn = await asyncpg.connect(raw, timeout=20, statement_cache_size=0, ssl="require")
         try:
-            ping = await conn.fetchval("SELECT 1")
-            if ping != 1:
-                return False, f"unexpected SELECT 1 result: {ping!r}"
-
-            table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
-            if table is None:
-                await conn.execute(CREATE_TABLE_SQL)
-                await conn.execute(CREATE_INDEX_SQL)
-                table = await conn.fetchval("SELECT to_regclass('public.chat_history')")
-
-            return True, f"chat_history={table}"
+            return await _ping_connection(conn)
         finally:
             await conn.close()
     except Exception as exc:
-        return False, str(exc)
+        errors.append(f"raw_dsn: {exc}")
+
+    try:
+        conn = await _connect_once(raw)
+        try:
+            return await _ping_connection(conn)
+        finally:
+            await conn.close()
+    except Exception as exc:
+        try:
+            params = parse_postgres_url(raw)
+            hint = f"parsed host={params.host}:{params.port} db={params.database}"
+        except Exception as parse_exc:
+            hint = f"parse: {parse_exc}"
+        errors.append(f"parsed: {exc}; {hint}")
+
+    return False, " | ".join(errors)
 
 
 async def close_chat_memory() -> None:
