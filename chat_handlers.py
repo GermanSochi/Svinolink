@@ -9,11 +9,10 @@ from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command, StateFilter
 from aiogram.types import FSInputFile, Message
 
+import ai_quota
 from config import settings
 from deps import gpt, store
 from message_urls import message_has_instagram_link, url_from_message
-from game_store import GameStore
-from riddle_ai import start_riddle_flow, try_solve_riddle
 from yandex_gpt import YandexGPTError
 
 logger = logging.getLogger(__name__)
@@ -21,8 +20,14 @@ router = Router(name="chat_handlers")
 
 CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
-_WAKE_RE = re.compile(
-    r"(?i)(@svinolink_bot|svinolink|свинолинк|свино\s*линк|свин\b|свино\b)"
+_SVIN_RE = re.compile(r"(?i)(?<![а-яё])свин(?![а-яё])")
+_SVIN_LIMIT_MSG = (
+    "🐷 Хватит дрочить свинью! У тебя закончился лимит: "
+    "доступно только 2 вопроса в час."
+)
+_SVIN_SYSTEM = (
+    "Ты Svinolink — дерзкий бот в мужском чате друзей. "
+    "Отвечай коротко, по делу, можно мат. Не упоминай код и админов."
 )
 
 
@@ -38,8 +43,6 @@ class InstagramAnyFilter(BaseFilter):
 
 IG_LINK_FILTER = InstagramAnyFilter()
 
-game = GameStore()
-
 
 def is_admin_user(user_id: int, username: str | None) -> bool:
     if user_id in settings.admin_ids:
@@ -49,15 +52,8 @@ def is_admin_user(user_id: int, username: str | None) -> bool:
     return False
 
 
-def is_wake_message(message: Message) -> bool:
-    text = message.text or message.caption or ""
-    if _WAKE_RE.search(text):
-        return True
-    if message.entities and message.from_user:
-        for ent in message.entities:
-            if ent.type == "mention" and "svinolink" in text.lower():
-                return True
-    return False
+def contains_svin(text: str) -> bool:
+    return bool(_SVIN_RE.search(text))
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
@@ -126,58 +122,31 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 pass
 
 
-@router.message(StateFilter(None), F.text, ~Command())
-async def handle_wake(message: Message, bot: Bot) -> None:
+@router.message(
+    StateFilter(None),
+    F.text,
+    ~Command(),
+    F.chat.type.in_({"group", "supergroup"}),
+)
+async def handle_svin_ai(message: Message, bot: Bot) -> None:
     if message_has_instagram_link(message):
         return
-    if not is_wake_message(message):
-        return
-    if not message.from_user:
-        return
-    try:
-        text = await start_riddle_flow(
-            message.chat.id, message.from_user.id, game
-        )
-        await message.reply(text)
-    except YandexGPTError:
-        await message.reply(
-            "На связи Svinolink. Кидай ссылку на Instagram Reel — пришлю видео."
-        )
-
-
-@router.message(StateFilter(None), F.text, ~Command())
-async def handle_riddle_answer(message: Message, bot: Bot) -> None:
     if not message.from_user or not message.text:
         return
-    if message_has_instagram_link(message):
-        return
-    if is_wake_message(message):
+    if not contains_svin(message.text):
         return
 
     uid = message.from_user.id
-    cid = message.chat.id
-
-    reply = await try_solve_riddle(cid, uid, message.text, game)
-    if reply:
-        await message.reply(reply)
+    if not ai_quota.can_ask(uid):
+        await message.reply(_SVIN_LIMIT_MSG)
         return
 
-    if game.is_unlocked(cid, uid) and not store.find_match(
-        message.text, store.load_triggers(cid)
-    ):
-        if game.questions_left(cid, uid) <= 0:
-            await message.reply("Лимит: 2 вопроса в час. Потом снова или кидай Reels.")
-            return
-        try:
-            answer = await gpt.reply(
-                message.text,
-                system=(
-                    "Ты Svinolink — дерзкий бот в мужском чате друзей. "
-                    "Отвечай коротко, по делу, можно мат. Не упоминай код и админов."
-                ),
-            )
-            game.use_question(cid, uid)
-            left = game.questions_left(cid, uid)
-            await message.reply(f"{answer}\n\n(осталось {left}/2 вопроса в час)")
-        except YandexGPTError:
-            await message.reply("Сейчас не могу ответить. Кидай Reels — видео скину.")
+    try:
+        answer = await gpt.reply(message.text, system=_SVIN_SYSTEM)
+        ai_quota.record(uid)
+        left = ai_quota.remaining(uid)
+        await message.reply(f"{answer}\n\n(У тебя осталось вопросов: {left} в час)")
+    except YandexGPTError:
+        await message.reply(
+            "Сейчас не могу ответить. Кидай Instagram — видео скину без лимитов."
+        )

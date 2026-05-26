@@ -4,12 +4,10 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from ai_quota import reset_user
 from chat_handlers import is_admin_user
-from deps import store
-from game_store import GameStore
 
 router = Router(name="admin_panel")
-game = GameStore()
 
 
 @router.message(Command("admin"), F.chat.type == "private")
@@ -41,7 +39,7 @@ async def cmd_admin_stats(message: Message) -> None:
     with sqlite3.connect(db) as conn:
       row = conn.execute("SELECT COUNT(*) FROM riddle WHERE solved=1").fetchone()
       solved = int(row[0]) if row else 0
-  await message.answer(f"Разгадали загадку: {solved} чел.\nТригеры: см. /triggers")
+  await message.answer(f"Разгадали загадку: {solved} чел.\nИИ «свин»: 2 вопроса/час на человека.")
 
 
 @router.message(Command("admin_reset"), F.chat.type == "private")
@@ -55,10 +53,5 @@ async def cmd_admin_reset(message: Message) -> None:
     await message.answer("/admin_reset TELEGRAM_USER_ID")
     return
   uid = int(parts[1])
-  import sqlite3
-  from config import settings
-
-  with sqlite3.connect(settings.data_dir / "game.db") as conn:
-    conn.execute("DELETE FROM riddle WHERE user_id=?", (uid,))
-    conn.execute("DELETE FROM ai_quota WHERE user_id=?", (uid,))
-  await message.answer(f"Сброшено для user_id {uid}")
+  reset_user(uid)
+  await message.answer(f"Сброшен ИИ-лимит «свин» для user_id {uid}")
