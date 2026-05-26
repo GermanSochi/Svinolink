@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from bot_startup import configure_bot
+from chat_memory import init_chat_memory
 from config import settings
 from instagram_download import init_instagram_downloader
 from webapp_server import STATIC, register_miniapp_routes
@@ -54,6 +55,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             "miniapp_manual_input": "manualChatId" in miniapp_html,
             "miniapp": "on" if settings.miniapp_url else "off",
             "mode": "webhook" if webhook else "polling",
+            "chat_memory": "on" if settings.supabase_database_url.strip() else "off",
         }
         return web.Response(
             text=json.dumps(payload, ensure_ascii=False),
@@ -70,6 +72,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         setup_application(app, dp, bot=bot)
 
         async def on_startup(_: web.Application) -> None:
+            await init_chat_memory()
             init_instagram_downloader()
             hooked = await apply_webhook(bot)
             await configure_bot(bot)
@@ -84,6 +87,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
     else:
 
         async def on_startup(_: web.Application) -> None:
+            await init_chat_memory()
             init_instagram_downloader()
             await bot.delete_webhook(drop_pending_updates=True)
             await configure_bot(bot)

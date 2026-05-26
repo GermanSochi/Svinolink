@@ -17,6 +17,8 @@ from chat_handlers import (
     handle_svin_ai,
     router as chat_router,
 )
+from chat_memory import close_chat_memory, init_chat_memory
+from memory_handlers import router as memory_router
 from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
@@ -68,9 +70,11 @@ def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
+    dp.include_router(memory_router)
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
     dp.include_router(trigger_router)
     dp.include_router(chat_router)
+    dp.include_router(memory_router)
     dp.include_router(admin_router)
 
     dp.message.register(cmd_start, CommandStart(), F.chat.type == "private")
@@ -103,6 +107,7 @@ async def main() -> None:
         else:
             await run_polling_with_http(bot, dp)
     finally:
+        await close_chat_memory()
         await gpt.close()
         await bot.session.close()
 

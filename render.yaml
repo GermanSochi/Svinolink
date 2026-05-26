@@ -20,6 +20,8 @@ services:
         sync: false
       - key: YANDEX_FOLDER_ID
         value: b1g3l4knr91bsq8mqhaq
+      - key: SUPABASE_DATABASE_URL
+        sync: false
       - key: ADMIN_IDS
         sync: false
       - key: INSTAGRAM_COOKIES_FILE

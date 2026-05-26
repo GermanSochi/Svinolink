@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         default=BASE_DIR / "data" / "cookies.txt",
         alias="INSTAGRAM_COOKIES_FILE",
     )
+    supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
 
     @field_validator("webhook_base_url", "public_base_url", mode="before")
     @classmethod

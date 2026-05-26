@@ -29,6 +29,7 @@ SVIN_AI_FILTER = (
     ~F.text.startswith("/"),
     F.chat.type.in_({"group", "supergroup"}),
     ~F.text.regexp(r"(?i)instagram\.com"),
+    ~F.text.regexp(r"(?i)(что было вчера|что произошло вчера)"),
     F.text.regexp(r"(?i)(свин|свинья)"),
 )
 

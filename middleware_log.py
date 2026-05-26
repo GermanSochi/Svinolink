@@ -6,7 +6,9 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject, Update
 
+from chat_memory import is_memory_enabled, log_message
 from deps import store
+from memory_handlers import display_name, should_silent_log
 
 logger = logging.getLogger("svinolink.updates")
 
@@ -34,4 +36,21 @@ class LogUpdatesMiddleware(BaseMiddleware):
                 m.from_user.id if m.from_user else None,
                 text,
             )
+            if (
+                is_memory_enabled()
+                and m.chat.type in {"group", "supergroup"}
+                and m.text
+                and m.from_user
+                and not m.from_user.is_bot
+                and should_silent_log(m.text)
+            ):
+                try:
+                    await log_message(
+                        chat_id=m.chat.id,
+                        user_id=m.from_user.id,
+                        username=display_name(m),
+                        message_text=m.text.strip(),
+                    )
+                except Exception as exc:
+                    logger.warning("chat_history log failed chat=%s: %s", m.chat.id, exc)
         return await handler(event, data)
