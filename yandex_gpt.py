@@ -6,13 +6,11 @@ import os
 
 import aiohttp
 
+from svin_system_prompt import SVIN_SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
 
 YANDEX_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-_SVIN_SYSTEM = (
-    "Ты веселый и ироничный бот-свинья в дружеском чате пацанов. "
-    "Отвечай коротко, емко и с юмором."
-)
 
 
 class YandexGPTError(RuntimeError):
@@ -53,7 +51,7 @@ class YandexGPT:
                 "maxTokens": 1000,
             },
             "messages": [
-                {"role": "system", "text": system or _SVIN_SYSTEM},
+                {"role": "system", "text": system or SVIN_SYSTEM_PROMPT},
                 {"role": "user", "text": user_text},
             ],
         }
