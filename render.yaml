@@ -4,12 +4,14 @@ services:
     name: svinolink-bot
     runtime: docker
     plan: free
-    healthCheckPath: /
+    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: WEBHOOK_BASE_URL
         sync: false
+      - key: WEBHOOK_PATH
+        value: webhook
       - key: PUBLIC_BASE_URL
         sync: false
       - key: YANDEX_API_KEY

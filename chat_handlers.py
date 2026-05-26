@@ -46,12 +46,19 @@ def is_wake_message(message: Message) -> bool:
   return False
 
 
-@router.message(StateFilter(None))
+@router.message(StateFilter(None), F.text | F.caption)
 async def handle_links_first(message: Message, bot: Bot) -> None:
+  text = message.text or message.caption or ""
+  logger.info(
+    "handle_links chat=%s type=%s text=%r",
+    message.chat.id,
+    message.chat.type,
+    text[:160],
+  )
   url = url_from_message(message)
   if not url:
     return
-  logger.info("link chat=%s url=%s", message.chat.id, url[:80])
+  logger.info("LINK MATCH chat=%s url=%s", message.chat.id, url[:80])
 
   status = await bot.send_message(
     message.chat.id,

@@ -34,11 +34,11 @@ async def configure_bot(bot: Bot) -> None:
         )
 
     info = await bot.get_webhook_info()
-    if settings.webhook_base_url.strip():
-        expected = settings.webhook_base_url.rstrip("/")
-        if not info.url or not info.url.startswith(expected):
+    expected = settings.webhook_full_url
+    if expected:
+        if info.url != expected:
             logger.error(
-                "Webhook НЕ настроен! url=%s ожидали %s — проверь Render env",
+                "Webhook mismatch: got=%s expected=%s",
                 info.url,
                 expected,
             )

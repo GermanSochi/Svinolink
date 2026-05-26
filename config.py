@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,11 +26,18 @@ class Settings(BaseSettings):
 
     webhook_base_url: str = Field(default="", alias="WEBHOOK_BASE_URL")
     public_base_url: str = Field(default="", alias="PUBLIC_BASE_URL")
-    webhook_path: str = Field(default="", alias="WEBHOOK_PATH")
+    webhook_path: str = Field(default="webhook", alias="WEBHOOK_PATH")
     port: int = Field(default=8080, alias="PORT")
 
     triggers_file: Path = Field(default=BASE_DIR / "triggers.json", alias="TRIGGERS_FILE")
     data_dir: Path = Field(default=BASE_DIR / "data", alias="DATA_DIR")
+
+    @field_validator("webhook_base_url", "public_base_url", mode="before")
+    @classmethod
+    def strip_trailing_slash(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip().rstrip("/")
+        return v
 
     @property
     def admin_ids(self) -> set[int]:
@@ -49,6 +56,22 @@ class Settings(BaseSettings):
     def miniapp_url(self) -> str:
         base = self.app_base_url
         return f"{base}/miniapp" if base else ""
+
+    @property
+    def webhook_route(self) -> str:
+        path = (self.webhook_path or "webhook").strip().lstrip("/")
+        return f"/{path}"
+
+    @property
+    def webhook_full_url(self) -> str:
+        base = self.webhook_base_url.rstrip("/")
+        if not base:
+            return ""
+        return f"{base}{self.webhook_route}"
+
+    @property
+    def is_render(self) -> bool:
+        return os.getenv("RENDER", "").lower() in {"true", "1", "yes"}
 
     @property
     def admin_usernames(self) -> set[str]:
