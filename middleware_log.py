@@ -6,11 +6,13 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject, Update
 
-from chat_memory import is_memory_enabled, log_message
+from chat_memory import is_memory_enabled, is_pool_ready, log_message
 from deps import store
 from memory_handlers import display_name, should_silent_log
 
 logger = logging.getLogger("svinolink.updates")
+
+_pool_warned = False
 
 
 class LogUpdatesMiddleware(BaseMiddleware):
@@ -20,6 +22,7 @@ class LogUpdatesMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        global _pool_warned
         if isinstance(event, Update) and event.message:
             m: Message = event.message
             if m.chat.type in {"group", "supergroup"}:
@@ -44,6 +47,12 @@ class LogUpdatesMiddleware(BaseMiddleware):
                 and not m.from_user.is_bot
                 and should_silent_log(m.text)
             ):
+                if not is_pool_ready() and not _pool_warned:
+                    _pool_warned = True
+                    logger.error(
+                        "chat_history: пул Supabase не поднят — сообщения НЕ пишутся в БД. "
+                        "Проверь /health/db и SUPABASE_DATABASE_URL на Render."
+                    )
                 try:
                     await log_message(
                         chat_id=m.chat.id,

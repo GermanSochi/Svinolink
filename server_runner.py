@@ -11,7 +11,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
-from chat_memory import check_connection, init_chat_memory
+from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
 from config import settings
 from instagram_download import init_instagram_downloader
 from webapp_server import STATIC, register_miniapp_routes
@@ -57,7 +57,11 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             "miniapp_manual_input": "manualChatId" in miniapp_html,
             "miniapp": "on" if settings.miniapp_url else "off",
             "mode": "webhook" if webhook else "polling",
-            "chat_memory": "on" if settings.supabase_database_url.strip() else "off",
+            "chat_memory": (
+                "connected"
+                if is_pool_ready()
+                else ("configured" if settings.supabase_database_url.strip() else "off")
+            ),
         }
         return web.Response(
             text=json.dumps(payload, ensure_ascii=False),
@@ -70,7 +74,12 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         else:
             try:
                 ok, detail = await check_connection()
-                payload = {"ok": ok, "detail": detail}
+                payload = {
+                    "ok": ok,
+                    "detail": detail,
+                    "pool_ready": is_pool_ready(),
+                    "url_hint": url_hint(settings.supabase_database_url),
+                }
             except Exception as exc:
                 payload = {"ok": False, "detail": str(exc)}
         return web.Response(
@@ -78,9 +87,30 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             content_type="application/json",
         )
 
+    async def health_db_audit(_: web.Request) -> web.Response:
+        if not settings.supabase_database_url.strip():
+            payload = {"ok": False, "detail": "SUPABASE_DATABASE_URL not set", "rows": []}
+        else:
+            ok, detail = await check_connection()
+            if not ok:
+                payload = {"ok": False, "detail": detail, "rows": []}
+            else:
+                rows = await fetch_audit_rows(10)
+                payload = {
+                    "ok": True,
+                    "detail": detail,
+                    "count": len(rows),
+                    "rows": rows,
+                }
+        return web.Response(
+            text=json.dumps(payload, ensure_ascii=False, default=str),
+            content_type="application/json",
+        )
+
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/health/db", health_db)
+    app.router.add_get("/health/db/audit", health_db_audit)
     register_miniapp_routes(app)
 
     if webhook:

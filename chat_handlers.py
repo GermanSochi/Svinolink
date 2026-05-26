@@ -25,7 +25,12 @@ SVIN_AI_FILTER = (
     ~F.text.startswith("/"),
     F.chat.type.in_({"group", "supergroup"}),
     ~F.text.regexp(r"(?i)instagram\.com"),
-    ~F.text.regexp(r"(?i)(что было вчера|что произошло вчера)"),
+    ~F.text.regexp(
+        r"(?i)(?:"
+        r"что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
+        r"|свин[\s,!?.\-]*что\s+(?:было|произошло)\s+(?:сегодня|вчера)"
+        r")"
+    ),
     F.text.regexp(r"(?i)(свин|свинья)"),
 )
 
@@ -154,7 +159,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         )
 
         if not ai_quota.can_ask(uid):
-            await message.reply(_SVIN_LIMIT_MSG)
+            await message.reply(ai_quota.limit_exceeded_message())
             return
 
         answer = await gpt.reply(message.text)
