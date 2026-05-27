@@ -7,6 +7,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import date
+from html import escape
 from pathlib import Path
 
 from config import settings
@@ -444,4 +445,51 @@ class TriggerStore:
                 lines.append(f"  • {self._format_rule_line(rule)}")
         if not lines:
             return "Нет сохранённых триггеров — только реакция на «Свин» и reply."
+        return "\n".join(lines)
+
+    def triggers_list_html(self, chat_id: int) -> str:
+        """Ответ пользователю: список триггеров из Supabase (без GPT)."""
+        defaults = self.load_defaults()
+        custom = self.load_custom(chat_id)
+        lines: list[str] = [
+            "🐷 <b>Триггеры этой группы</b> (из Supabase + встроенные)\n"
+        ]
+
+        if defaults:
+            lines.append(f"<b>Встроенные — {len(defaults)}:</b>")
+            for rule in defaults:
+                words = ", ".join(escape(w) for w in rule.words)
+                resp = escape(rule.response)
+                daily = " · 1/день" if rule.once_per_day else ""
+                match_label = "содержит" if rule.match == "contains" else "точно"
+                lines.append(
+                    f"• <code>{words}</code> ({match_label}) → {resp}{daily}"
+                )
+
+        if custom:
+            lines.append(f"\n<b>Кастомные (Supabase) — {len(custom)}:</b>")
+            for rule in custom:
+                words = ", ".join(escape(w) for w in rule.words)
+                resp = escape(rule.response)
+                daily = " · 1/день" if rule.once_per_day else ""
+                match_label = "содержит" if rule.match == "contains" else "точно"
+                who = ""
+                if rule.added_by_username:
+                    who = f" · @{escape(rule.added_by_username.lstrip('@'))}"
+                lines.append(
+                    f"• <code>{words}</code> ({match_label}) → {resp}{daily}{who}"
+                )
+        else:
+            lines.append(
+                "\n<i>Кастомных триггеров в Supabase пока нет — "
+                "добавь через Mini App ⚙️ в меню бота.</i>"
+            )
+
+        if not defaults and not custom:
+            return (
+                "🐷 В Supabase для этой группы триггеров пока нет.\n"
+                "Добавь через Mini App ⚙️ — я сохраню их навсегда."
+            )
+
+        lines.append("\n<i>Редактировать: Mini App ⚙️ в меню бота.</i>")
         return "\n".join(lines)

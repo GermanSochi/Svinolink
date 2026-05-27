@@ -14,6 +14,7 @@ from config import settings
 from deps import gpt, store
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
+from trigger_queries import is_trigger_list_question
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
@@ -175,6 +176,16 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             uid,
             message.text[:200],
         )
+
+        if is_trigger_list_question(message.text):
+            reply = store.triggers_list_html(message.chat.id)
+            logger.info(
+                "trigger_list chat=%s reply_chars=%s",
+                message.chat.id,
+                len(reply),
+            )
+            await message.reply(reply, parse_mode="HTML")
+            return
 
         if not ai_quota.can_ask(uid):
             await message.reply(ai_quota.limit_exceeded_message())
