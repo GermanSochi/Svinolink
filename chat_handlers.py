@@ -25,6 +25,7 @@ from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
 from yandex_router import route_intent
 from games import execute_game_action
+from games.responses import render_game_response
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
@@ -385,13 +386,8 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                 action_type=routed["action_type"],
                 payload=routed["payload"],
             )
-            # Лёгкая подстановка данных, если ведущий оставил плейсхолдеры.
-            resp = routed["text_response"]
-            if data:
-                try:
-                    resp = resp.format(**data)
-                except Exception:
-                    pass
+            # Важное: ответ всегда строим от результата движка, чтобы не было "шляпы".
+            resp = render_game_response(routed["game_id"], routed["action_type"], data)
             await reply_formatted(message, resp)
             return
 

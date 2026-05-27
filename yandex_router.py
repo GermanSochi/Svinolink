@@ -72,7 +72,7 @@ async def route_intent(user_text: str) -> RouterResult:
     """
     prompt = (
         f"Сообщение пользователя:\n{user_text}\n\n"
-        "Верни JSON по схеме."
+        "Верни JSON по схеме. action_type только из допустимых."
     )
     try:
         raw = await gpt.reply(prompt, system=GAME_ROUTER_SYSTEM_PROMPT)
