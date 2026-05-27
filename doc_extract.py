@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 from docx import Document
 from openpyxl import load_workbook
@@ -32,9 +33,37 @@ def extract_xlsx_preview(data: bytes, *, max_rows: int = 15, max_cols: int = 8) 
     for r_i, row in enumerate(ws.iter_rows(values_only=True), start=1):
         if r_i > max_rows:
             break
-        cells = ["" if v is None else str(v) for v in row[:max_cols]]
-        rows.append(" | ".join(cells).strip())
-    return "\n".join(r for r in rows if r).strip()
+        cells = [_clean_cell(v) for v in row[:max_cols]]
+        # убираем пустые хвосты
+        while cells and not cells[-1]:
+            cells.pop()
+        if not any(cells):
+            continue
+        # более читаемый разделитель вместо |
+        rows.append(" · ".join(c for c in cells if c))
+
+    if not rows:
+        return ""
+
+    # Превью как список строк: каждую строку пометим эмодзи-якорем.
+    out_lines = []
+    marks = ("📌", "🔹", "🧾", "🧩", "⚙️", "🎯", "🗂️", "🧷", "📝", "📎")
+    for i, r in enumerate(rows):
+        out_lines.append(f"{marks[i % len(marks)]} {r}")
+    return "\n".join(out_lines).strip()
+
+
+def _clean_cell(v) -> str:
+    if v is None:
+        return ""
+    s = str(v)
+    # заменяем "забор" и вертикальные разделители
+    s = s.replace("|", " ").replace("│", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    # ограничение длины ячейки, чтобы не рвало сообщение
+    if len(s) > 60:
+        s = s[:60].rstrip() + "…"
+    return s
 
 
 def extract_plain_text(data: bytes) -> str:

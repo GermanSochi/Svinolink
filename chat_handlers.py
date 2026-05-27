@@ -339,7 +339,9 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     )
                     return
 
-                snippet = _redact_secrets(extracted).replace("\n", " ").strip()
+                cleaned = _redact_secrets(extracted).strip()
+                # XLSX уже форматируется построчно — сохраняем переносы строк.
+                snippet = cleaned if kind == "XLSX" else cleaned.replace("\n", " ")
                 if len(snippet) > 2000:
                     snippet = snippet[:2000] + "…"
                 await reply_formatted(
