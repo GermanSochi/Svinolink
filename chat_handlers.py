@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import io
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
@@ -18,6 +19,8 @@ from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
 from media_requests import parse_meme_request, parse_video_request
 from media_tools import image_to_bytes, make_meme_image, save_bytes
+from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, parse_trigger_manage
+from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
@@ -192,6 +195,125 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             uid,
             text[:200],
         )
+
+        # Управление триггерами из чата (добавить/удалить/править) — раньше списка,
+        # чтобы фраза "добавь триггер" не перехватывалась "какие триггеры".
+        action = parse_trigger_manage(text)
+        if action:
+            if isinstance(action, TriggerAdd):
+                rule_id = store.add_custom_rule(
+                    message.chat.id,
+                    action.word,
+                    action.response,
+                    once_per_day=action.once_per_day,
+                    added_by_user_id=uid,
+                    added_by_username=message.from_user.username,
+                )
+                await reply_formatted(
+                    message,
+                    "✅ **Триггер добавлен**\n\n"
+                    f"🎯 **Слово**: `{action.word}`\n\n"
+                    f"💬 **Ответ**: **{action.response}**\n\n"
+                    f"🧷 **ID**: `{rule_id}`",
+                )
+                return
+            if isinstance(action, TriggerDelete):
+                removed = store.delete_custom_by_indices(
+                    message.chat.id, [i - 1 for i in action.indices_1based]
+                )
+                if removed:
+                    await reply_formatted(
+                        message,
+                        "🗑️ **Триггеры удалены**\n\n"
+                        f"🔢 Кол-во: **{removed}**",
+                    )
+                else:
+                    await reply_formatted(
+                        message,
+                        "🗑️ Не нашёл такие номера.\n\n"
+                        "🧷 Спроси **«какие триггеры»** и удали по номеру.",
+                    )
+                return
+            if isinstance(action, TriggerUpdate):
+                ok = store.update_custom_rule(
+                    message.chat.id,
+                    action.index_1based - 1,
+                    word=action.word,
+                    response=action.response,
+                )
+                if ok:
+                    await reply_formatted(
+                        message,
+                        "✏️ **Триггер обновлён**\n\n"
+                        f"🔢 Номер: **{action.index_1based}**",
+                    )
+                else:
+                    await reply_formatted(
+                        message,
+                        "✏️ Не нашёл такой номер.\n\n"
+                        "🧷 Спроси **«какие триггеры»** и выбери номер.",
+                    )
+                return
+
+        # Достать текст из документа — текстом (reply на файл)
+        if message.reply_to_message and message.reply_to_message.document:
+            low = text.lower()
+            wants_text = any(
+                x in low
+                for x in (
+                    "достань текст",
+                    "вытащи текст",
+                    "достать текст",
+                    "извлеки текст",
+                    "вытяни текст",
+                    "прочитай документ",
+                    "прочитай файл",
+                    "текст из документа",
+                )
+            )
+            if wants_text:
+                doc = message.reply_to_message.document
+                buf = io.BytesIO()
+                await bot.download(doc.file_id, destination=buf)
+                data = buf.getvalue()
+
+                name = (doc.file_name or "").lower()
+                extracted = ""
+                kind = ""
+                if name.endswith(".pdf") or (doc.mime_type or "").lower().endswith("pdf"):
+                    kind = "PDF"
+                    extracted = extract_pdf_text(data)
+                elif name.endswith(".docx"):
+                    kind = "DOCX"
+                    extracted = extract_docx_text(data)
+                elif name.endswith(".xlsx"):
+                    kind = "XLSX"
+                    extracted = extract_xlsx_preview(data)
+
+                if not kind:
+                    await reply_formatted(
+                        message,
+                        "📎 Понимаю только **PDF/DOCX/XLSX**.\n\n"
+                        "🧷 Ответь этой фразой на файл: **«Свин, достань текст из документа»**",
+                    )
+                    return
+
+                if not extracted:
+                    await reply_formatted(
+                        message,
+                        f"📎 **{kind}** пустой или текст не извлёкся.\n\n"
+                        "Если это сканы — нужна OCR.",
+                    )
+                    return
+
+                snippet = extracted.replace("\n", " ").strip()
+                if len(snippet) > 2000:
+                    snippet = snippet[:2000] + "…"
+                await reply_formatted(
+                    message,
+                    f"📎 **{kind} → текст**\n\n🧾 {snippet}",
+                )
+                return
 
         if is_trigger_list_question(text):
             reply = store.triggers_list_markdown(message.chat.id)

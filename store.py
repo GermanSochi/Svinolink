@@ -169,6 +169,8 @@ class TriggerStore:
         response: str,
         *,
         once_per_day: bool = False,
+        added_by_user_id: int | None = None,
+        added_by_username: str | None = None,
     ) -> str:
         rules = self.load_custom(chat_id)
         safe = re.sub(r"[^a-z0-9_-]", "", word.lower())[:16] or "w"
@@ -180,6 +182,8 @@ class TriggerStore:
                 response=response.strip(),
                 once_per_day=once_per_day,
                 match="exact",
+                added_by_user_id=added_by_user_id,
+                added_by_username=added_by_username,
             )
         )
         self.save_custom(chat_id, rules)
