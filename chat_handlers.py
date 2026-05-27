@@ -12,6 +12,8 @@ from aiogram.types import FSInputFile, Message
 import ai_quota
 from config import settings
 from deps import gpt, store
+from chat_examples import chat_examples_html
+from chat_queries import is_chat_examples_request
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
@@ -184,6 +186,12 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                 message.chat.id,
                 len(reply),
             )
+            await message.reply(reply, parse_mode="HTML")
+            return
+
+        if is_chat_examples_request(message.text):
+            reply = await chat_examples_html(message.chat.id)
+            logger.info("chat_examples chat=%s", message.chat.id)
             await message.reply(reply, parse_mode="HTML")
             return
 

@@ -12,6 +12,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
+from chat_style import daily_style_loop
 from config import settings
 from instagram_download import init_instagram_downloader
 from webapp_server import STATIC, register_miniapp_routes
@@ -118,14 +119,20 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=route)
         setup_application(app, dp, bot=bot)
 
-        async def on_startup(_: web.Application) -> None:
+        async def on_startup(app: web.Application) -> None:
             await init_chat_memory()
             init_instagram_downloader()
             hooked = await apply_webhook(bot)
             await configure_bot(bot)
+            app["style_task"] = asyncio.create_task(daily_style_loop())
             logger.info("Listening POST %s | Mini App %s", route, settings.miniapp_url or "off")
 
-        async def on_shutdown(_: web.Application) -> None:
+        async def on_shutdown(app: web.Application) -> None:
+            task = app.get("style_task")
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             with suppress(Exception):
                 await bot.delete_webhook(drop_pending_updates=False)
 
@@ -133,11 +140,12 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         app.on_shutdown.append(on_shutdown)
     else:
 
-        async def on_startup(_: web.Application) -> None:
+        async def on_startup(app: web.Application) -> None:
             await init_chat_memory()
             init_instagram_downloader()
             await bot.delete_webhook(drop_pending_updates=True)
             await configure_bot(bot)
+            app["style_task"] = asyncio.create_task(daily_style_loop())
             logger.info("Polling mode | Mini App %s", settings.miniapp_url or "off")
 
         app.on_startup.append(on_startup)
