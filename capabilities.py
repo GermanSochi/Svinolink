@@ -4,14 +4,28 @@ import re
 
 
 _CAP_RE = re.compile(
-    r"(?i)\b(что\s+ты\s+умеешь|что\s+умеешь|какие\s+умеешь|твои\s+навык|навык(и)?\s+свина|help|хелп)\b"
+    r"(?is)(?:^|\s|[\"'“”«»])("
+    r"что\s+ты\s+умеешь"
+    r"|что\s+умеешь"
+    r"|что\s+можешь"
+    r"|умеешь\s*\?"
+    r"|твои\s+навык"
+    r"|навык(?:и)?\s+свина"
+    r"|help"
+    r"|хелп"
+    r")(?:$|\s|[?!.,:;\"'“”«»])"
 )
 
 
 def is_capabilities_question(text: str | None) -> bool:
     if not text:
         return False
-    return _CAP_RE.search(text) is not None
+    t = text.strip()
+    # Быстрый фолбэк: любые варианты "умеешь" рядом с "что" — это точно help.
+    low = t.lower()
+    if "умеешь" in low and ("что" in low or "чё" in low or "че" in low):
+        return True
+    return _CAP_RE.search(t) is not None
 
 
 def capabilities_markdown() -> str:
