@@ -15,6 +15,7 @@ from deps import gpt, store
 from chat_examples import chat_examples_markdown
 from telegram_format import reply_formatted
 from chat_queries import is_chat_examples_request
+from capabilities import capabilities_markdown, is_capabilities_question
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
@@ -194,6 +195,10 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             reply = await chat_examples_markdown(message.chat.id)
             logger.info("chat_examples chat=%s", message.chat.id)
             await reply_formatted(message, reply)
+            return
+
+        if is_capabilities_question(message.text):
+            await reply_formatted(message, capabilities_markdown())
             return
 
         if not ai_quota.can_ask(uid):

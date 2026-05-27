@@ -10,3 +10,6 @@ pypdf>=4.2
 openpyxl>=3.1
 python-docx>=1.1
 edge-tts>=6.1
+pillow>=10.4
+moviepy>=1.0.3
+memegen>=1.0.1
