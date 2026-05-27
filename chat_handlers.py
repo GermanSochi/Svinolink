@@ -27,6 +27,21 @@ from trigger_queries import is_trigger_list_question
 logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
 
+_SECRET_REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"), "sk-***"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"), "ghp_***"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{10,}\b"), "hf_***"),
+    (re.compile(r"\bvcp_[A-Za-z0-9]{10,}\b"), "vcp_***"),
+    (re.compile(r"\b(xox[baprs]-[A-Za-z0-9-]{10,})\b"), "xox***"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    out = text
+    for pat, repl in _SECRET_REDACTIONS:
+        out = pat.sub(repl, out)
+    return out
+
 CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
 
@@ -277,6 +292,12 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     "прочитай файл",
                     "текст из документа",
                     "текст из файла",
+                    "расшифруй текст",
+                    "расшифровать текст",
+                    "распознай текст",
+                    "распознать текст",
+                    "покажи текст",
+                    "покажи содержимое",
                 )
             )
             if wants_text:
@@ -318,7 +339,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     )
                     return
 
-                snippet = extracted.replace("\n", " ").strip()
+                snippet = _redact_secrets(extracted).replace("\n", " ").strip()
                 if len(snippet) > 2000:
                     snippet = snippet[:2000] + "…"
                 await reply_formatted(
