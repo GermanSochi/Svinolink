@@ -447,49 +447,51 @@ class TriggerStore:
             return "Нет сохранённых триггеров — только реакция на «Свин» и reply."
         return "\n".join(lines)
 
-    def triggers_list_html(self, chat_id: int) -> str:
+    def triggers_list_markdown(self, chat_id: int) -> str:
         """Ответ пользователю: список триггеров из Supabase (без GPT)."""
         defaults = self.load_defaults()
         custom = self.load_custom(chat_id)
         lines: list[str] = [
-            "🐷 <b>Триггеры этой группы</b> (из Supabase + встроенные)\n"
+            "🐷 **Триггеры этой группы** (Supabase + встроенные)\n"
         ]
 
         if defaults:
-            lines.append(f"<b>Встроенные — {len(defaults)}:</b>")
+            lines.append(f"⚙️ **Встроенные** — {len(defaults)}:\n")
             for rule in defaults:
-                words = ", ".join(escape(w) for w in rule.words)
-                resp = escape(rule.response)
+                words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
                 match_label = "содержит" if rule.match == "contains" else "точно"
                 lines.append(
-                    f"• <code>{words}</code> ({match_label}) → {resp}{daily}"
+                    f"🔹 `{words}` ({match_label}) → **{rule.response}**{daily}\n"
                 )
 
         if custom:
-            lines.append(f"\n<b>Кастомные (Supabase) — {len(custom)}:</b>")
+            lines.append(f"\n💾 **Кастомные в Supabase** — {len(custom)}:\n")
             for rule in custom:
-                words = ", ".join(escape(w) for w in rule.words)
-                resp = escape(rule.response)
+                words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
                 match_label = "содержит" if rule.match == "contains" else "точно"
                 who = ""
                 if rule.added_by_username:
-                    who = f" · @{escape(rule.added_by_username.lstrip('@'))}"
+                    who = f" · @{rule.added_by_username.lstrip('@')}"
                 lines.append(
-                    f"• <code>{words}</code> ({match_label}) → {resp}{daily}{who}"
+                    f"🎯 `{words}` ({match_label}) → **{rule.response}**{daily}{who}\n"
                 )
         else:
             lines.append(
-                "\n<i>Кастомных триггеров в Supabase пока нет — "
-                "добавь через Mini App ⚙️ в меню бота.</i>"
+                "\n📭 Кастомных триггеров в Supabase пока нет — "
+                "добавь через Mini App ⚙️ в меню бота.\n"
             )
 
         if not defaults and not custom:
             return (
-                "🐷 В Supabase для этой группы триггеров пока нет.\n"
-                "Добавь через Mini App ⚙️ — я сохраню их навсегда."
+                "🐷 В Supabase для этой группы триггеров пока нет.\n\n"
+                "Добавь через Mini App ⚙️ — сохраню навсегда."
             )
 
-        lines.append("\n<i>Редактировать: Mini App ⚙️ в меню бота.</i>")
+        lines.append("\n✏️ Редактировать: Mini App ⚙️ в меню бота.")
         return "\n".join(lines)
+
+    def triggers_list_html(self, chat_id: int) -> str:
+        """Совместимость: отдаём Markdown."""
+        return self.triggers_list_markdown(chat_id)

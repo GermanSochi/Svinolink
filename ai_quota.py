@@ -36,3 +36,10 @@ def record(user_id: int) -> None:
 
 def reset_user(user_id: int) -> None:
     _timestamps.pop(user_id, None)
+
+
+def limit_exceeded_message() -> str:
+    return (
+        f"🐷 Хватит дрочить свинью! У тебя закончился лимит: "
+        f"доступно только {HOURLY_LIMIT} вопросов в час."
+    )

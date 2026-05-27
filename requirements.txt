@@ -4,3 +4,4 @@ asyncpg>=0.29,<1.0
 instagrapi>=2.1.0
 pydantic-settings>=2.0,<3.0
 pydantic>=2.0,<3.0
+telegramify-markdown>=1.1.5

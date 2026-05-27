@@ -13,6 +13,7 @@ from chat_queries import needs_recent_history
 from chat_style import build_style_system_appendix, get_style_notes
 from deps import gpt, store
 from svin_system_prompt import SVIN_SYSTEM_PROMPT
+from telegram_format import reply_formatted
 
 logger = logging.getLogger(__name__)
 router = Router(name="memory_handlers")
@@ -159,7 +160,7 @@ async def handle_chat_recap(message: Message, bot: Bot) -> None:
         )
         answer = await gpt.reply(prompt, system=system)
         ai_quota.record(uid)
-        await message.reply(answer)
+        await reply_formatted(message, answer)
     except Exception as exc:
         logger.error("chat recap error: %s", exc, exc_info=True)
         await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(exc)}")

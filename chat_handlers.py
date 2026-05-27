@@ -12,7 +12,8 @@ from aiogram.types import FSInputFile, Message
 import ai_quota
 from config import settings
 from deps import gpt, store
-from chat_examples import chat_examples_html
+from chat_examples import chat_examples_markdown
+from telegram_format import reply_formatted
 from chat_queries import is_chat_examples_request
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
@@ -180,19 +181,19 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         )
 
         if is_trigger_list_question(message.text):
-            reply = store.triggers_list_html(message.chat.id)
+            reply = store.triggers_list_markdown(message.chat.id)
             logger.info(
                 "trigger_list chat=%s reply_chars=%s",
                 message.chat.id,
                 len(reply),
             )
-            await message.reply(reply, parse_mode="HTML")
+            await reply_formatted(message, reply)
             return
 
         if is_chat_examples_request(message.text):
-            reply = await chat_examples_html(message.chat.id)
+            reply = await chat_examples_markdown(message.chat.id)
             logger.info("chat_examples chat=%s", message.chat.id)
-            await message.reply(reply, parse_mode="HTML")
+            await reply_formatted(message, reply)
             return
 
         if not ai_quota.can_ask(uid):
@@ -202,7 +203,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         prompt, system = await svin_prompt_with_memory(message.chat.id, message.text)
         answer = await gpt.reply(prompt, system=system)
         ai_quota.record(uid)
-        await message.reply(answer)
+        await reply_formatted(message, answer)
     except Exception as e:
         logger.error("svin_ai error: %s", e, exc_info=True)
         await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(e)}")
