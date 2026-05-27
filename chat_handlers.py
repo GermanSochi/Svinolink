@@ -23,6 +23,8 @@ from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_previe
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
+from yandex_router import route_intent
+from games import execute_game_action
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_handlers")
@@ -371,6 +373,27 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             return
 
         # Мемы/видосы отключены по просьбе (пока без генерации картинок).
+
+        # Игровой роутер: Yandex возвращает JSON, мы исполняем в БД.
+        routed = await route_intent(text)
+        if routed["is_game_action"] and routed["game_id"] != "none":
+            data = await execute_game_action(
+                chat_id=message.chat.id,
+                telegram_user_id=uid,
+                username=message.from_user.username,
+                game_id=routed["game_id"],
+                action_type=routed["action_type"],
+                payload=routed["payload"],
+            )
+            # Лёгкая подстановка данных, если ведущий оставил плейсхолдеры.
+            resp = routed["text_response"]
+            if data:
+                try:
+                    resp = resp.format(**data)
+                except Exception:
+                    pass
+            await reply_formatted(message, resp)
+            return
 
         if not ai_quota.can_ask(uid):
             await message.reply(ai_quota.limit_exceeded_message())

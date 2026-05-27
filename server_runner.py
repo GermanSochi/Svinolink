@@ -15,6 +15,7 @@ from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is
 from chat_style import daily_style_loop
 from config import settings
 from instagram_download import init_instagram_downloader
+from game_init import init_game_db
 from webapp_server import STATIC, register_miniapp_routes
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,8 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         async def on_startup(app: web.Application) -> None:
             await init_chat_memory()
             init_instagram_downloader()
+            with suppress(Exception):
+                await init_game_db()
             hooked = await apply_webhook(bot)
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
@@ -143,6 +146,8 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         async def on_startup(app: web.Application) -> None:
             await init_chat_memory()
             init_instagram_downloader()
+            with suppress(Exception):
+                await init_game_db()
             await bot.delete_webhook(drop_pending_updates=True)
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())

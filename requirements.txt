@@ -15,3 +15,5 @@ moviepy>=1.0.3
 yt-dlp>=2025.0.0
 chromadb>=0.6.0
 faiss-cpu>=1.14.0
+SQLAlchemy>=2.0
+aiosqlite>=0.20
