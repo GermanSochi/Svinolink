@@ -232,14 +232,22 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             img_path = save_bytes(data, settings.downloads_dir, prefix="frame", ext="png")
             out_path = settings.downloads_dir / f"vid-{img_path.stem}.mp4"
             clip = ImageClip(str(img_path)).set_duration(3)
-            clip.write_videofile(
-                str(out_path),
-                fps=24,
-                codec="libx264",
-                audio=False,
-                verbose=False,
-                logger=None,
-            )
+            try:
+                clip.write_videofile(
+                    str(out_path),
+                    fps=24,
+                    codec="libx264",
+                    preset="ultrafast",
+                    bitrate="900k",
+                    audio=False,
+                    verbose=False,
+                    logger=None,
+                )
+            finally:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
             await message.reply_video(FSInputFile(out_path), reply_to_message_id=message.message_id)
             return
 
