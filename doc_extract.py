@@ -36,3 +36,14 @@ def extract_xlsx_preview(data: bytes, *, max_rows: int = 15, max_cols: int = 8) 
         rows.append(" | ".join(cells).strip())
     return "\n".join(r for r in rows if r).strip()
 
+
+def extract_plain_text(data: bytes) -> str:
+    # Пытаемся UTF-8, затем Windows-1251 (часто для русских txt).
+    for enc in ("utf-8", "utf-8-sig", "cp1251"):
+        try:
+            return data.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    # Последний шанс: игнорируем битые символы.
+    return data.decode("utf-8", errors="ignore").strip()
+

@@ -19,7 +19,7 @@ from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
 # Мемы/видосы отключены — оставляем импорты закомментированными на будущее.
 from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, parse_trigger_manage
-from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview
+from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview, extract_plain_text
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
@@ -256,8 +256,14 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     )
                 return
 
-        # Достать текст из документа — текстом (reply на файл)
+        # Достать текст из документа — текстом (reply на файл ИЛИ файл с подписью)
+        doc_msg = None
         if message.reply_to_message and message.reply_to_message.document:
+            doc_msg = message.reply_to_message
+        elif message.document:
+            doc_msg = message
+
+        if doc_msg and doc_msg.document:
             low = text.lower()
             wants_text = any(
                 x in low
@@ -270,10 +276,11 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     "прочитай документ",
                     "прочитай файл",
                     "текст из документа",
+                    "текст из файла",
                 )
             )
             if wants_text:
-                doc = message.reply_to_message.document
+                doc = doc_msg.document
                 buf = io.BytesIO()
                 await bot.download(doc.file_id, destination=buf)
                 data = buf.getvalue()
@@ -290,12 +297,16 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                 elif name.endswith(".xlsx"):
                     kind = "XLSX"
                     extracted = extract_xlsx_preview(data)
+                elif name.endswith(".txt") or (doc.mime_type or "").lower().startswith("text/"):
+                    kind = "TXT"
+                    extracted = extract_plain_text(data)
 
                 if not kind:
                     await reply_formatted(
                         message,
-                        "📎 Понимаю только **PDF/DOCX/XLSX**.\n\n"
-                        "🧷 Ответь этой фразой на файл: **«Свин, достань текст из документа»**",
+                        "📎 Понимаю **PDF/DOCX/XLSX/TXT**.\n\n"
+                        "🧷 Пришли файл с подписью **«Свин, достань текст из файла»** "
+                        "или ответь реплаем на файл.",
                     )
                     return
 
