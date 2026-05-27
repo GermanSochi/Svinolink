@@ -237,7 +237,10 @@ async def init_chat_memory() -> None:
         async with _pool.acquire() as conn:
             await conn.execute(CREATE_TABLE_SQL)
             await conn.execute(CREATE_INDEX_SQL)
-        logger.info("Supabase chat_history ready")
+            from trigger_supabase import ensure_trigger_tables
+
+            await ensure_trigger_tables(conn)
+        logger.info("Supabase chat_history + chat_triggers ready")
     except Exception as exc:
         _pool = None
         _pool_init_failed = True

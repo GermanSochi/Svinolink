@@ -12,11 +12,18 @@ from aiogram.types import (
 )
 
 from config import settings
+from svin_system_prompt import BOT_RULES_SHORT
 
 logger = logging.getLogger(__name__)
 
 
 async def configure_bot(bot: Bot) -> None:
+    try:
+        await bot.set_my_description(BOT_RULES_SHORT)
+        await bot.set_my_short_description(BOT_RULES_SHORT[:120])
+    except Exception as exc:
+        logger.warning("Bot description failed: %s", exc)
+
     for scope in (
         BotCommandScopeDefault(),
         BotCommandScopeAllGroupChats(),

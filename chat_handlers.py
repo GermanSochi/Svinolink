@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
@@ -20,6 +21,27 @@ router = Router(name="chat_handlers")
 CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
 
+_bot_id: int | None = None
+
+
+class SvinInvokeFilter(BaseFilter):
+    """Срабатывает на «свин» в тексте или reply на сообщение бота."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        global _bot_id
+        if not message.text:
+            return False
+        if re.search(r"(?i)(свин|свинья)", message.text):
+            return True
+        replied = message.reply_to_message
+        if not replied or not replied.from_user or not replied.from_user.is_bot:
+            return False
+        if _bot_id is None:
+            me = await bot.get_me()
+            _bot_id = me.id
+        return replied.from_user.id == _bot_id
+
+
 SVIN_AI_FILTER = (
     StateFilter(None),
     F.text,
@@ -27,7 +49,7 @@ SVIN_AI_FILTER = (
     F.chat.type.in_({"group", "supergroup"}),
     ~F.text.regexp(r"(?i)instagram\.com"),
     ~F.text.regexp(RECAP_PATTERN),
-    F.text.regexp(r"(?i)(свин|свинья)"),
+    SvinInvokeFilter(),
 )
 
 
@@ -161,8 +183,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         prompt, system = await svin_prompt_with_memory(message.chat.id, message.text)
         answer = await gpt.reply(prompt, system=system)
         ai_quota.record(uid)
-        left = ai_quota.remaining(uid)
-        await message.reply(f"{answer}\n\n(Осталось вопросов: {left} в час)")
+        await message.reply(answer)
     except Exception as e:
         logger.error("svin_ai error: %s", e, exc_info=True)
         await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(e)}")

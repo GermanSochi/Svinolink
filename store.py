@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -9,6 +10,8 @@ from datetime import date
 from pathlib import Path
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -96,10 +99,37 @@ class TriggerStore:
         return self._load_json_rules(settings.triggers_file, builtin=True)
 
     def load_custom(self, chat_id: int) -> list[TriggerRule]:
+        if self._supabase_enabled():
+            try:
+                from trigger_supabase import (
+                    load_custom_triggers,
+                    run_async,
+                    save_custom_triggers,
+                )
+
+                rules = run_async(load_custom_triggers(chat_id))
+                if rules:
+                    return rules
+                file_rules = self._load_json_rules(
+                    self._chat_path(chat_id), builtin=False
+                )
+                if file_rules:
+                    run_async(save_custom_triggers(chat_id, file_rules))
+                    return file_rules
+                return []
+            except Exception as exc:
+                logger.warning(
+                    "load_custom supabase chat=%s: %s", chat_id, exc
+                )
         return self._load_json_rules(self._chat_path(chat_id), builtin=False)
 
     def load_triggers(self, chat_id: int) -> list[TriggerRule]:
         return self.load_defaults() + self.load_custom(chat_id)
+
+    def _supabase_enabled(self) -> bool:
+        from chat_memory import is_memory_enabled
+
+        return is_memory_enabled()
 
     def save_custom(self, chat_id: int, rules: list[TriggerRule]) -> None:
         payload = {
@@ -121,6 +151,15 @@ class TriggerStore:
             encoding="utf-8",
         )
         self.register_chat(chat_id)
+        if self._supabase_enabled():
+            try:
+                from trigger_supabase import run_async, save_custom_triggers
+
+                run_async(save_custom_triggers(chat_id, rules))
+            except Exception as exc:
+                logger.warning(
+                    "save_custom supabase chat=%s: %s", chat_id, exc
+                )
 
     def add_custom_rule(
         self,
@@ -252,6 +291,15 @@ class TriggerStore:
         path = self._chat_path(chat_id)
         if path.is_file():
             path.unlink()
+        if self._supabase_enabled():
+            try:
+                from trigger_supabase import delete_custom_triggers, run_async
+
+                run_async(delete_custom_triggers(chat_id))
+            except Exception as exc:
+                logger.warning(
+                    "delete triggers supabase chat=%s: %s", chat_id, exc
+                )
 
     def get_chat_title(self, chat_id: int) -> str:
         with sqlite3.connect(self._db) as conn:
@@ -319,6 +367,15 @@ class TriggerStore:
         return hints
 
     def was_used_today(self, chat_id: int, user_id: int, trigger_id: str) -> bool:
+        if self._supabase_enabled():
+            try:
+                from trigger_supabase import run_async, was_trigger_used_today
+
+                return run_async(
+                    was_trigger_used_today(chat_id, user_id, trigger_id)
+                )
+            except Exception as exc:
+                logger.warning("was_used_today supabase: %s", exc)
         today = date.today().isoformat()
         with sqlite3.connect(self._db) as conn:
             row = conn.execute(
@@ -331,6 +388,14 @@ class TriggerStore:
         return row is not None
 
     def mark_used_today(self, chat_id: int, user_id: int, trigger_id: str) -> None:
+        if self._supabase_enabled():
+            try:
+                from trigger_supabase import mark_trigger_used_today, run_async
+
+                run_async(mark_trigger_used_today(chat_id, user_id, trigger_id))
+                return
+            except Exception as exc:
+                logger.warning("mark_used_today supabase: %s", exc)
         today = date.today().isoformat()
         with sqlite3.connect(self._db) as conn:
             conn.execute(

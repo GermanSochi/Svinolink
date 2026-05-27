@@ -131,8 +131,7 @@ async def handle_chat_recap(message: Message, bot: Bot) -> None:
         )
         answer = await gpt.reply(prompt, system=SVIN_SYSTEM_PROMPT)
         ai_quota.record(uid)
-        left = ai_quota.remaining(uid)
-        await message.reply(f"{answer}\n\n(Осталось вопросов: {left} в час)")
+        await message.reply(answer)
     except Exception as exc:
         logger.error("chat recap error: %s", exc, exc_info=True)
         await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(exc)}")
