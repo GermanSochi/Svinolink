@@ -23,6 +23,7 @@ from config import settings
 from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
 from server_runner import run_polling_with_http, run_webhook_mode
+from skills_tools import router as skills_router
 from trigger_fsm import PRIVATE_GREET, router as trigger_router
 
 logging.basicConfig(
@@ -69,6 +70,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
+    dp.include_router(skills_router)
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
     dp.include_router(memory_router)
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
