@@ -485,26 +485,29 @@ class TriggerStore:
             for rule in defaults:
                 words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
-                match_label = "содержит" if rule.match == "contains" else "точно"
+                match_label = "в тексте" if rule.match == "contains" else "слово"
                 if rule.match == "word":
-                    match_label = "слово"
+                    match_label = "слово (в тексте)"
                 lines.append(
                     f"🔹 `{words}` ({match_label}) → **{rule.response}**{daily}\n"
                 )
 
         if custom:
-            lines.append(f"\n💾 **Кастомные в Supabase** — {len(custom)}:\n")
-            for rule in custom:
+            lines.append(
+                f"\n💾 **Кастомные в Supabase** — {len(custom)}:\n"
+                "🔢 Номер нужен для **удаления/правки**.\n"
+            )
+            for i, rule in enumerate(custom, start=1):
                 words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
-                match_label = "содержит" if rule.match == "contains" else "точно"
+                match_label = "в тексте" if rule.match == "contains" else "слово"
                 if rule.match == "word":
-                    match_label = "слово"
+                    match_label = "слово (в тексте)"
                 who = ""
                 if rule.added_by_username:
                     who = f" · @{rule.added_by_username.lstrip('@')}"
                 lines.append(
-                    f"🎯 `{words}` ({match_label}) → **{rule.response}**{daily}{who}\n"
+                    f"🎯 **{i}.** `{words}` ({match_label}) → **{rule.response}**{daily}{who}\n"
                 )
         else:
             lines.append(
