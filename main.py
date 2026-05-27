@@ -13,6 +13,7 @@ from admin_panel import router as admin_router
 from chat_handlers import (
     IG_LINK_FILTER,
     SVIN_AI_FILTER,
+    SVIN_CAPTION_FILTER,
     handle_instagram_link,
     handle_svin_ai,
     router as chat_router,
@@ -74,6 +75,7 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
     dp.include_router(memory_router)
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
+    dp.message.register(handle_svin_ai, *SVIN_CAPTION_FILTER)
     dp.include_router(trigger_router)
     dp.include_router(chat_router)
     dp.include_router(admin_router)

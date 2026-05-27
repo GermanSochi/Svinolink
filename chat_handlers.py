@@ -16,6 +16,8 @@ from chat_examples import chat_examples_markdown
 from telegram_format import reply_formatted
 from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
+from media_requests import parse_meme_request, parse_video_request
+from media_tools import image_to_bytes, make_meme_image, save_bytes
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
@@ -34,9 +36,10 @@ class SvinInvokeFilter(BaseFilter):
 
     async def __call__(self, message: Message, bot: Bot) -> bool:
         global _bot_id
-        if not message.text:
+        text = message.text or message.caption
+        if not text:
             return False
-        if re.search(r"(?i)(свин|свинья)", message.text):
+        if re.search(r"(?i)(свин|свинья)", text):
             return True
         replied = message.reply_to_message
         if not replied or not replied.from_user or not replied.from_user.is_bot:
@@ -54,6 +57,14 @@ SVIN_AI_FILTER = (
     F.chat.type.in_({"group", "supergroup"}),
     ~F.text.regexp(r"(?i)instagram\.com"),
     ~F.text.regexp(RECAP_PATTERN),
+    SvinInvokeFilter(),
+)
+
+SVIN_CAPTION_FILTER = (
+    StateFilter(None),
+    F.caption,
+    F.chat.type.in_({"group", "supergroup"}),
+    ~F.caption.regexp(r"(?i)instagram\.com"),
     SvinInvokeFilter(),
 )
 
@@ -170,7 +181,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
 async def handle_svin_ai(message: Message, bot: Bot) -> None:
     try:
-        if not message.from_user or not message.text:
+        text = message.text or message.caption
+        if not message.from_user or not text:
             return
 
         uid = message.from_user.id
@@ -178,10 +190,10 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             "svin_ai chat=%s user=%s text=%r",
             message.chat.id,
             uid,
-            message.text[:200],
+            text[:200],
         )
 
-        if is_trigger_list_question(message.text):
+        if is_trigger_list_question(text):
             reply = store.triggers_list_markdown(message.chat.id)
             logger.info(
                 "trigger_list chat=%s reply_chars=%s",
@@ -191,21 +203,51 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             await reply_formatted(message, reply)
             return
 
-        if is_chat_examples_request(message.text):
+        if is_chat_examples_request(text):
             reply = await chat_examples_markdown(message.chat.id)
             logger.info("chat_examples chat=%s", message.chat.id)
             await reply_formatted(message, reply)
             return
 
-        if is_capabilities_question(message.text):
+        if is_capabilities_question(text):
             await reply_formatted(message, capabilities_markdown())
+            return
+
+        meme_text = parse_meme_request(text)
+        if meme_text:
+            img = make_meme_image(meme_text)
+            data = image_to_bytes(img, fmt="PNG")
+            path = save_bytes(data, settings.downloads_dir, prefix="meme", ext="png")
+            await message.reply_photo(FSInputFile(path))
+            return
+
+        video_text = parse_video_request(text)
+        if video_text:
+            # Без TextClip (нужен ImageMagick). Делаем картинку через PIL и
+            # превращаем её в короткий mp4 через ImageClip + ffmpeg.
+            from moviepy.editor import ImageClip
+
+            img = make_meme_image(video_text)
+            data = image_to_bytes(img, fmt="PNG")
+            img_path = save_bytes(data, settings.downloads_dir, prefix="frame", ext="png")
+            out_path = settings.downloads_dir / f"vid-{img_path.stem}.mp4"
+            clip = ImageClip(str(img_path)).set_duration(3)
+            clip.write_videofile(
+                str(out_path),
+                fps=24,
+                codec="libx264",
+                audio=False,
+                verbose=False,
+                logger=None,
+            )
+            await message.reply_video(FSInputFile(out_path), reply_to_message_id=message.message_id)
             return
 
         if not ai_quota.can_ask(uid):
             await message.reply(ai_quota.limit_exceeded_message())
             return
 
-        prompt, system = await svin_prompt_with_memory(message.chat.id, message.text)
+        prompt, system = await svin_prompt_with_memory(message.chat.id, text)
         answer = await gpt.reply(prompt, system=system)
         ai_quota.record(uid)
         await reply_formatted(message, answer)
