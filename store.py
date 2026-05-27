@@ -14,6 +14,8 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+PRIMARY_CHAT_ID = -1002006623025
+
 
 @dataclass
 class TriggerRule:
@@ -33,6 +35,11 @@ class TriggerStore:
         (settings.data_dir / "chats").mkdir(parents=True, exist_ok=True)
         self._db = settings.data_dir / "svinolink.db"
         self._init_db()
+        # Страховка: основная группа всегда активна в Mini App.
+        try:
+            self.register_chat(PRIMARY_CHAT_ID, title="Основная группа", chat_type="supergroup", active=True)
+        except Exception as exc:
+            logger.warning("primary chat register failed: %s", exc)
 
     def _init_db(self) -> None:
         with sqlite3.connect(self._db) as conn:

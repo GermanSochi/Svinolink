@@ -39,11 +39,26 @@ _UPD_RE = re.compile(
     r"(?:измени|поменяй|правь|обнови|обновить)\s+триг+ер\s*[:\-—]?\s*(.+)$"
 )
 
+_UPD_ALT_RE = re.compile(
+    r"(?is)\b(?:свин(?:ья)?\s*,?\s*)?"
+    r"триг+ер\s*[:\-—]?\s*(\d+)\s+"
+    r"(?:измени|поменяй|правь|обнови|обновить)\s*[:\-—]?\s*(.+)$"
+)
+
+_UPD_ALT2_RE = re.compile(
+    r"(?is)\b(?:свин(?:ья)?\s*,?\s*)?"
+    r"триг+ер\s*[:\-—]?\s*(\d+)\s+"
+    r"(?:измени|поменяй|правь|обнови|обновить)\b"
+    r"(?:\s+на)?\s+(.+)$"
+)
+
 
 def parse_trigger_manage(text: str | None) -> TriggerAdd | TriggerDelete | TriggerUpdate | None:
     if not text:
         return None
     t = text.strip()
+    # типичная опечатка: "в тексе"
+    t = re.sub(r"(?is)\bв\s+тексе\b", "в тексте", t)
 
     m = _ADD_RE.search(t)
     if m:
@@ -58,6 +73,16 @@ def parse_trigger_manage(text: str | None) -> TriggerAdd | TriggerDelete | Trigg
     m = _UPD_RE.search(t)
     if m:
         payload = (m.group(1) or "").strip()
+        return _parse_upd_payload(payload)
+
+    m = _UPD_ALT_RE.search(t)
+    if m:
+        payload = f"{m.group(1)} {m.group(2)}".strip()
+        return _parse_upd_payload(payload)
+
+    m = _UPD_ALT2_RE.search(t)
+    if m:
+        payload = f"{m.group(1)} {m.group(2)}".strip()
         return _parse_upd_payload(payload)
 
     return None
