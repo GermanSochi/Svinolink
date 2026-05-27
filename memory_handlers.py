@@ -9,7 +9,7 @@ from aiogram.types import Message
 
 import ai_quota
 from chat_memory import fetch_recent, is_memory_enabled
-from deps import gpt
+from deps import gpt, store
 from svin_system_prompt import SVIN_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -66,22 +66,26 @@ def build_transcript(rows: list[dict[str, object]]) -> str:
 
 
 async def svin_prompt_with_memory(chat_id: int, user_text: str) -> tuple[str, str]:
-    """Подмешивает историю чата из Supabase в user prompt; system — всегда SVIN_SYSTEM_PROMPT."""
-    if not is_memory_enabled():
-        return user_text, SVIN_SYSTEM_PROMPT
+    """История чата + список триггеров из Supabase в user prompt."""
+    sections: list[str] = [
+        "Активные триггеры этой группы:\n" + store.triggers_summary_text(chat_id)
+    ]
 
-    rows = await fetch_recent(chat_id, period="today")
-    if not rows:
-        rows = await fetch_recent(chat_id, period="24h")
-    if not rows:
-        return user_text, SVIN_SYSTEM_PROMPT
+    if is_memory_enabled():
+        rows = await fetch_recent(chat_id, period="today")
+        if not rows:
+            rows = await fetch_recent(chat_id, period="24h")
+        if rows:
+            transcript = build_transcript(rows)
+            sections.append(
+                f"История переписки (Supabase, {len(rows)} сообщений):\n\n{transcript}"
+            )
 
-    transcript = build_transcript(rows)
     prompt = (
-        f"История переписки в группе (Supabase, {len(rows)} сообщений):\n\n"
-        f"{transcript}\n\n"
-        f"---\nСейчас пользователь пишет: {user_text}\n\n"
-        "Ответь на его сообщение, опираясь на историю выше."
+        "\n\n".join(sections)
+        + f"\n\n---\nСейчас пользователь пишет: {user_text}\n\n"
+        "Ответь на сообщение. Если спрашивают про триггеры — перечисли их из блока выше. "
+        "Если про факты из чата — опирайся на историю."
     )
     return prompt, SVIN_SYSTEM_PROMPT
 

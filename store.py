@@ -418,3 +418,30 @@ class TriggerStore:
                 elif normalized == word:
                     return rule
         return None
+
+    @staticmethod
+    def _format_rule_line(rule: TriggerRule) -> str:
+        words = ", ".join(rule.words)
+        match_label = "содержит" if rule.match == "contains" else "точное"
+        daily = " · 1/день" if rule.once_per_day else ""
+        who = ""
+        if rule.added_by_username:
+            who = f" · @{rule.added_by_username.lstrip('@')}"
+        return f"[{words}] ({match_label}) → {rule.response}{daily}{who}"
+
+    def triggers_summary_text(self, chat_id: int) -> str:
+        """Текстовая выжимка триггеров для промпта GPT."""
+        defaults = self.load_defaults()
+        custom = self.load_custom(chat_id)
+        lines: list[str] = []
+        if defaults:
+            lines.append(f"Встроенные ({len(defaults)}):")
+            for rule in defaults:
+                lines.append(f"  • {self._format_rule_line(rule)}")
+        if custom:
+            lines.append(f"Кастомные в Supabase ({len(custom)}):")
+            for rule in custom:
+                lines.append(f"  • {self._format_rule_line(rule)}")
+        if not lines:
+            return "Нет сохранённых триггеров — только реакция на «Свин» и reply."
+        return "\n".join(lines)
