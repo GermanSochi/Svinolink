@@ -9,6 +9,7 @@ class TriggerAdd:
     word: str
     response: str
     once_per_day: bool
+    match: str  # exact | contains | word
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class TriggerUpdate:
     index_1based: int
     word: str | None
     response: str | None
+    match: str | None  # exact | contains | word
 
 
 _ADD_RE = re.compile(
@@ -69,16 +71,27 @@ def _parse_add_payload(payload: str) -> TriggerAdd | None:
     # "нет минет" (последний — хуже, но поддержим если есть ключевые слова)
     low = payload.lower()
     once = "1/день" in low or "раз в сутки" in low or "daily" in low
+    match = _parse_match_mode(low)
 
     # слово/ответ по ключам
     m = re.search(r"(?is)\bслово\s+(.+?)\s+\bответ\s+(.+)$", payload)
     if m:
-        return TriggerAdd(word=m.group(1).strip(), response=m.group(2).strip(), once_per_day=once)
+        return TriggerAdd(
+            word=m.group(1).strip(),
+            response=m.group(2).strip(),
+            once_per_day=once,
+            match=match,
+        )
 
     # стрелка/равно
     m = re.split(r"\s*(?:->|→|=|=>)\s*", payload, maxsplit=1)
     if len(m) == 2 and m[0].strip() and m[1].strip():
-        return TriggerAdd(word=m[0].strip(), response=m[1].strip(), once_per_day=once)
+        return TriggerAdd(
+            word=m[0].strip(),
+            response=m[1].strip(),
+            once_per_day=once,
+            match=match,
+        )
 
     return None
 
@@ -107,6 +120,7 @@ def _parse_upd_payload(payload: str) -> TriggerUpdate | None:
 
     word: str | None = None
     resp: str | None = None
+    match: str | None = None
 
     m2 = re.search(r"(?is)\bслово\s+(.+?)(?:\s+\bответ\b\s+|$)", rest)
     if m2:
@@ -116,7 +130,25 @@ def _parse_upd_payload(payload: str) -> TriggerUpdate | None:
     if m3:
         resp = m3.group(1).strip()
 
-    if word is None and resp is None:
+    match = _parse_match_mode(rest.lower(), allow_none=True)
+
+    if word is None and resp is None and match is None:
         return None
-    return TriggerUpdate(index_1based=idx, word=word, response=resp)
+    return TriggerUpdate(index_1based=idx, word=word, response=resp, match=match)
+
+
+def _parse_match_mode(low: str, *, allow_none: bool = False) -> str | None:
+    """
+    Режимы:
+    - word: только отдельное слово (не часть предложения)
+    - contains: содержится в тексте
+    - exact: сообщение целиком равно слову
+    """
+    if any(x in low for x in ("режим слово", "только слово", "отдельное слово", "по слову", "word")):
+        return "word"
+    if any(x in low for x in ("в тексте", "содержит", "contains", "внутри текста")):
+        return "contains"
+    if any(x in low for x in ("точно", "строго", "exact")):
+        return "exact"
+    return None if allow_none else "exact"
 

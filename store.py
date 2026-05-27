@@ -21,7 +21,7 @@ class TriggerRule:
     words: list[str]
     response: str
     once_per_day: bool
-    match: str  # exact | contains
+    match: str  # exact | contains | word
     builtin: bool = False
     added_by_user_id: int | None = None
     added_by_username: str | None = None
@@ -171,6 +171,7 @@ class TriggerStore:
         once_per_day: bool = False,
         added_by_user_id: int | None = None,
         added_by_username: str | None = None,
+        match: str = "exact",
     ) -> str:
         rules = self.load_custom(chat_id)
         safe = re.sub(r"[^a-z0-9_-]", "", word.lower())[:16] or "w"
@@ -181,7 +182,7 @@ class TriggerStore:
                 words=[word.lower().strip()],
                 response=response.strip(),
                 once_per_day=once_per_day,
-                match="exact",
+                match=match,
                 added_by_user_id=added_by_user_id,
                 added_by_username=added_by_username,
             )
@@ -191,7 +192,13 @@ class TriggerStore:
         return rule_id
 
     def update_custom_rule(
-        self, chat_id: int, index: int, *, word: str | None, response: str | None
+        self,
+        chat_id: int,
+        index: int,
+        *,
+        word: str | None,
+        response: str | None,
+        match: str | None = None,
     ) -> bool:
         rules = self.load_custom(chat_id)
         if index < 0 or index >= len(rules):
@@ -201,6 +208,8 @@ class TriggerStore:
         if response is not None:
             rules[index].response = response.strip()
             self.remember_style(chat_id, response.strip())
+        if match is not None:
+            rules[index].match = match
         self.save_custom(chat_id, rules)
         return True
 
@@ -420,6 +429,15 @@ class TriggerStore:
                 if rule.match == "contains":
                     if word in normalized:
                         return rule
+                elif rule.match == "word":
+                    # Отдельное слово: "да" сработает, а "сегодня ... да" — нет,
+                    # если да не отдельный токен.
+                    # Граница слова по \w (unicode): подходит для кириллицы.
+                    import re
+
+                    pat = rf"(?<!\w){re.escape(word)}(?!\w)"
+                    if re.search(pat, normalized, flags=re.UNICODE):
+                        return rule
                 elif normalized == word:
                     return rule
         return None
@@ -427,7 +445,11 @@ class TriggerStore:
     @staticmethod
     def _format_rule_line(rule: TriggerRule) -> str:
         words = ", ".join(rule.words)
-        match_label = "содержит" if rule.match == "contains" else "точное"
+        match_label = (
+            "содержит"
+            if rule.match == "contains"
+            else ("слово" if rule.match == "word" else "точное")
+        )
         daily = " · 1/день" if rule.once_per_day else ""
         who = ""
         if rule.added_by_username:
@@ -465,6 +487,8 @@ class TriggerStore:
                 words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
                 match_label = "содержит" if rule.match == "contains" else "точно"
+                if rule.match == "word":
+                    match_label = "слово"
                 lines.append(
                     f"🔹 `{words}` ({match_label}) → **{rule.response}**{daily}\n"
                 )
@@ -475,6 +499,8 @@ class TriggerStore:
                 words = ", ".join(rule.words)
                 daily = " · 1/день" if rule.once_per_day else ""
                 match_label = "содержит" if rule.match == "contains" else "точно"
+                if rule.match == "word":
+                    match_label = "слово"
                 who = ""
                 if rule.added_by_username:
                     who = f" · @{rule.added_by_username.lstrip('@')}"

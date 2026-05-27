@@ -17,8 +17,7 @@ from chat_examples import chat_examples_markdown
 from telegram_format import reply_formatted
 from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
-from media_requests import parse_meme_request, parse_video_request
-from media_tools import image_to_bytes, make_meme_image, save_bytes
+# Мемы/видосы отключены — оставляем импорты закомментированными на будущее.
 from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, parse_trigger_manage
 from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
@@ -208,6 +207,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     once_per_day=action.once_per_day,
                     added_by_user_id=uid,
                     added_by_username=message.from_user.username,
+                    match=action.match,
                 )
                 await reply_formatted(
                     message,
@@ -240,6 +240,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
                     action.index_1based - 1,
                     word=action.word,
                     response=action.response,
+                    match=action.match,
                 )
                 if ok:
                     await reply_formatted(
@@ -335,43 +336,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             await reply_formatted(message, capabilities_markdown())
             return
 
-        meme_text = parse_meme_request(text)
-        if meme_text:
-            img = make_meme_image(meme_text)
-            data = image_to_bytes(img, fmt="PNG")
-            path = save_bytes(data, settings.downloads_dir, prefix="meme", ext="png")
-            await message.reply_photo(FSInputFile(path))
-            return
-
-        video_text = parse_video_request(text)
-        if video_text:
-            # Без TextClip (нужен ImageMagick). Делаем картинку через PIL и
-            # превращаем её в короткий mp4 через ImageClip + ffmpeg.
-            from moviepy.editor import ImageClip
-
-            img = make_meme_image(video_text)
-            data = image_to_bytes(img, fmt="PNG")
-            img_path = save_bytes(data, settings.downloads_dir, prefix="frame", ext="png")
-            out_path = settings.downloads_dir / f"vid-{img_path.stem}.mp4"
-            clip = ImageClip(str(img_path)).set_duration(3)
-            try:
-                clip.write_videofile(
-                    str(out_path),
-                    fps=24,
-                    codec="libx264",
-                    preset="ultrafast",
-                    bitrate="900k",
-                    audio=False,
-                    verbose=False,
-                    logger=None,
-                )
-            finally:
-                try:
-                    clip.close()
-                except Exception:
-                    pass
-            await message.reply_video(FSInputFile(out_path), reply_to_message_id=message.message_id)
-            return
+        # Мемы/видосы отключены по просьбе (пока без генерации картинок).
 
         if not ai_quota.can_ask(uid):
             await message.reply(ai_quota.limit_exceeded_message())
