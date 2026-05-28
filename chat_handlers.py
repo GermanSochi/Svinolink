@@ -376,6 +376,7 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         if web_reply:
             await reply_formatted(message, web_reply)
             return
+        # только ссылка без «Свин» — ниже уйдёт в GPT; IG ловится отдельным хендлером
 
         tone_reply = await try_personality_or_roster(message)
         if tone_reply:

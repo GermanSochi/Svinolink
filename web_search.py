@@ -13,10 +13,25 @@ logger = logging.getLogger(__name__)
 _SEARCH_TRIGGERS = re.compile(
     r"(?is)(?:"
     r"(?:найди|поищи|загугли|погугли|гугли)\s+(?:в\s+)?(?:интернет[еу]?|сети|гугл(?:е)?)"
+    r"|(?:прочитай|узнай|расскажи)\s+(?:в\s+)?интернет[еу]?"
     r"|(?:что|как)\s+(?:пишут\s+)?(?:в\s+)?интернет[еу]?\s+(?:про|о)"
     r"|поиск\s+в\s+(?:интернет[еу]?|сети)"
     r"|найди\s+в\s+сети"
     r")"
+)
+
+_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+_READ_URL_WORDS = (
+    "прочитай",
+    "открой",
+    "посмотри",
+    "глянь",
+    "что на сайте",
+    "что на странице",
+    "расскажи про сайт",
+    "вытащи текст",
+    "достань текст со страницы",
 )
 
 _SHORTHAND = re.compile(
@@ -44,6 +59,7 @@ def extract_search_query(text: str) -> str | None:
 
     for pat in (
         r"(?is)(?:найди|поищи|загугли|погугли|гугли)\s+(?:в\s+)?(?:интернет[еу]?|сети|гугл(?:е)?)\s*[:\-—]?\s*(.+)$",
+        r"(?is)(?:прочитай|узнай|расскажи)\s+(?:в\s+)?интернет[еу]?\s+(?:что\s+такое\s+)?(.+)$",
         r"(?is)(?:что|как)\s+(?:пишут\s+)?(?:в\s+)?интернет[еу]?\s+(?:про|о)\s+(.+)$",
         r"(?is)поиск\s+в\s+(?:интернет[еу]?|сети)\s*[:\-—]?\s*(.+)$",
         r"(?is)найди\s+в\s+сети\s+(.+)$",
@@ -171,4 +187,95 @@ def format_search_markdown(query: str, results: list[dict[str, Any]]) -> str:
     lines.append(
         "\n\n✅ Источник: **DuckDuckGo**. Для уточнения — спроси ещё раз конкретнее."
     )
+    return "\n".join(lines)
+
+
+def extract_http_url(text: str) -> str | None:
+    """Любая http(s) ссылка, кроме Instagram (тот — отдельный обработчик)."""
+    m = _HTTP_URL_RE.search(text)
+    if not m:
+        return None
+    url = m.group(0).rstrip(").,]>")
+    if "instagram.com" in url.lower():
+        return None
+    return url
+
+
+def wants_url_read(text: str) -> bool:
+    low = text.lower()
+    if not extract_http_url(text):
+        return False
+    return any(w in low for w in _READ_URL_WORDS)
+
+
+async def fetch_page_preview(url: str) -> dict[str, str]:
+    from bs4 import BeautifulSoup
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; SvinolinkBot/1.0; +https://github.com/GermanSochi/Svinolink)"
+        )
+    }
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=18),
+        headers=headers,
+    ) as session:
+        async with session.get(url, allow_redirects=True) as resp:
+            if resp.status >= 400:
+                return {"error": f"HTTP {resp.status}"}
+            html = await resp.text(errors="ignore")
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    title = ""
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+
+    h1 = soup.find("h1")
+    h1_text = h1.get_text(" ", strip=True) if h1 else ""
+
+    meta_desc = ""
+    meta = soup.find("meta", attrs={"name": re.compile(r"description", re.I)})
+    if meta and meta.get("content"):
+        meta_desc = str(meta["content"]).strip()
+
+    chunks: list[str] = []
+    for p in soup.find_all("p", limit=8):
+        t = p.get_text(" ", strip=True)
+        if len(t) > 40:
+            chunks.append(t)
+    body = "\n".join(chunks)
+    if len(body) > 1800:
+        body = body[:1800] + "…"
+
+    return {
+        "title": title,
+        "h1": h1_text,
+        "description": meta_desc,
+        "body": body,
+        "final_url": url,
+    }
+
+
+def format_page_markdown(url: str, data: dict[str, str]) -> str:
+    if data.get("error"):
+        return (
+            f"🐷 Не смог открыть ссылку.\n\n"
+            f"🔗 {url}\n\n"
+            f"❌ {data['error']}"
+        )
+
+    lines = [f"🐷 **Страница по ссылке**\n\n🔗 {url}\n"]
+    if data.get("title"):
+        lines.append(f"\n🏷️ **{data['title']}**")
+    if data.get("h1") and data["h1"] != data.get("title"):
+        lines.append(f"\n📌 **{data['h1']}**")
+    if data.get("description"):
+        lines.append(f"\n💬 {data['description']}")
+    if data.get("body"):
+        lines.append(f"\n\n🧾 {data['body']}")
+    if len(lines) == 1:
+        lines.append("\n\n⚠️ Текст на странице не вытащился — возможно, сайт грузится через JS.")
     return "\n".join(lines)
