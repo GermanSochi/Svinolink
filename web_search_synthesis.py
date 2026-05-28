@@ -10,6 +10,7 @@ from web_search import (
     build_snippet_fallback,
     build_wiki_fallback,
     is_meta_refusal_answer,
+    is_wrong_factual_answer,
     wrap_short_answer,
 )
 
@@ -26,7 +27,12 @@ async def synthesize_search_answer(
     chat_id: int | None = None,
 ) -> str:
     from deps import gpt
-    from chat_personality import tone_appendix_for_chat
+
+    # «Что такое» + нормальная статья Вики — факты напрямую, без GPT (тон не ломает ответ)
+    if detailed and wiki_extra:
+        wiki_fb = build_wiki_fallback(query, wiki_extra)
+        if wiki_fb:
+            return wiki_fb
 
     evidence = build_search_evidence(query, results, pages, wiki_extra=wiki_extra)
     if detailed:
@@ -40,9 +46,6 @@ async def synthesize_search_answer(
         system = SEARCH_SYNTHESIS_SYSTEM
         user_tail = "Дай один короткий ответ на запрос. Только текст ответа, без ссылок."
         max_len = 1100
-
-    if chat_id is not None:
-        system = system + tone_appendix_for_chat(chat_id)
 
     prompt = f"{evidence}\n\n{user_tail}"
     try:
@@ -62,9 +65,11 @@ async def synthesize_search_answer(
             f"{gpt_glitch_message()}"
         )
 
-    if is_meta_refusal_answer(answer):
+    if is_meta_refusal_answer(answer) or is_wrong_factual_answer(
+        query, answer, wiki_extra
+    ):
         logger.warning(
-            "search synthesis meta-refusal for %r",
+            "search answer rejected for %r (meta or wrong facts)",
             query[:80],
         )
         if wiki_extra:

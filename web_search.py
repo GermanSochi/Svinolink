@@ -123,7 +123,6 @@ def extract_knowledge_query(text: str) -> str | None:
 
     for pat in (
         r"(?is)^(?:что|кто)\s+так(?:ое|ой|ая)\s+(.+)$",
-        r"(?is)^(?:расскажи|объясни)\s+(?:(?:мне\s+)?(?:про|о)\s+)?(.+)$",
         r"(?is)^как\s+(?:правильно\s+)?(?:сделать|делать|приготовить|починить|"
         r"установить|настроить|пользоваться|работает)\s+(.+)$",
     ):
@@ -382,6 +381,31 @@ _META_REFUSAL_RE = re.compile(
 
 def is_meta_refusal_answer(text: str) -> bool:
     return bool(_META_REFUSAL_RE.search(text))
+
+
+_GENERIC_MACHINE_RE = re.compile(
+    r"(?i)техническое\s+устройство|механическ(?:ие|их)\s+движен|преобразовани[ея]\s+энерг"
+)
+
+
+def is_wrong_factual_answer(
+    query: str,
+    answer: str,
+    wiki_extra: dict[str, str] | None,
+) -> bool:
+    """Отсечь ответ «машина — устройство» на «машина пирожок» и т.п."""
+    q = query.lower()
+    a = answer.lower()
+    if re.search(r"пирожок|пиражок", q):
+        if re.search(r"иж|2715|фургон", a):
+            return False
+        if _GENERIC_MACHINE_RE.search(a):
+            return True
+        if wiki_extra:
+            title = str(wiki_extra.get("title") or "").lower()
+            if "иж" in title or "2715" in title:
+                return True
+    return False
 
 
 def build_wiki_fallback(query: str, wiki_extra: dict[str, str]) -> str | None:
