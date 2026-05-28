@@ -26,7 +26,7 @@ class ChatMember:
         return out
 
 
-# Основная группа — фиксированный состав (~5 человек)
+# Основная группа — фиксированный состав
 MEMBERS: tuple[ChatMember, ...] = (
     ChatMember(
         telegram="notintricate",
@@ -75,6 +75,20 @@ MEMBERS: tuple[ChatMember, ...] = (
             "tom",
             "frod",
             "том",
+        ),
+    ),
+    ChatMember(
+        telegram="gersochi",
+        label="Гера",
+        aliases=(
+            "гера",
+            "герман",
+            "германн",
+            "german",
+            "herman",
+            "gersochi",
+            "gerso",
+            "герочи",
         ),
     ),
 )
