@@ -6,8 +6,8 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class UserLogQuery:
     username: str | None  # None = все участники; иначе Telegram-ник
-    display_name: str | None = None  # Гия, Дима… для ответа
     period: str  # today | yesterday | day_before | 24h
+    display_name: str | None = None  # Гия, Дима… для ответа
     hour_from: int | None = None
     hour_to: int | None = None
     minute_from: int = 0
