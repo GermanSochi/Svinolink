@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WebSearchReply:
     text: str
-    photo_url: str | None = None
+    photo_bytes: bytes | None = None
 
 
 async def try_url_read_reply(message: Message) -> str | None:
@@ -79,7 +79,7 @@ async def try_web_search_reply(message: Message) -> WebSearchReply | None:
             )
         )
 
-    pages, photo_url, wiki_extra = await fetch_knowledge_pages(query, results)
+    pages, photo_bytes, wiki_extra = await fetch_knowledge_pages(query, results)
     answer = await synthesize_search_answer(
         query,
         results,
@@ -89,4 +89,4 @@ async def try_web_search_reply(message: Message) -> WebSearchReply | None:
     )
     if uid:
         ai_quota.record(uid)
-    return WebSearchReply(text=answer, photo_url=photo_url)
+    return WebSearchReply(text=answer, photo_bytes=photo_bytes)

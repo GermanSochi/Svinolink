@@ -11,6 +11,18 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+_WIKI_HEADERS = {
+    "User-Agent": (
+        "SvinolinkBot/1.0 (Telegram; +https://github.com/GermanSochi/Svinolink)"
+    ),
+    "Accept": "application/json",
+}
+
+# Народные названия → статья Вики (если opensearch промахнулся)
+_WIKI_TITLE_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)пирожок|пиражок"), "ИЖ-2715"),
+]
+
 _SEARCH_TRIGGERS = re.compile(
     r"(?is)(?:"
     r"(?:найди|поищи|загугли|погугли|гугли)\s+(?:в\s+)?(?:интернет[еу]?|сети|гугл(?:е)?)"
@@ -427,7 +439,29 @@ def _pick_other_urls(results: list[dict[str, Any]], *, limit: int = 2) -> list[s
     return urls
 
 
+def _wiki_title_hint(query: str) -> str | None:
+    for pat, title in _WIKI_TITLE_HINTS:
+        if pat.search(query):
+            return title
+    return None
+
+
+def _wiki_photo_from_summary(data: dict) -> str:
+    for key in ("thumbnail", "originalimage"):
+        block = data.get(key)
+        if isinstance(block, dict):
+            src = str(block.get("source") or "").strip()
+            if src.startswith("https://"):
+                return src
+    return ""
+
+
 async def wikipedia_opensearch(query: str) -> str | None:
+    hint = _wiki_title_hint(query)
+    if hint:
+        title = quote(hint.replace(" ", "_"), safe="/")
+        return f"https://ru.wikipedia.org/wiki/{title}"
+
     q = ddg_search_query(query)
     params = {
         "action": "opensearch",
@@ -439,7 +473,8 @@ async def wikipedia_opensearch(query: str) -> str | None:
     for lang in ("ru", "en"):
         try:
             async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=12)
+                timeout=aiohttp.ClientTimeout(total=12),
+                headers=_WIKI_HEADERS,
             ) as session:
                 async with session.get(
                     f"https://{lang}.wikipedia.org/w/api.php", params=params
@@ -454,6 +489,43 @@ async def wikipedia_opensearch(query: str) -> str | None:
     return None
 
 
+async def wikipedia_pageimage_url(lang: str, title_slug: str) -> str:
+    title = unquote(title_slug).replace("_", " ")
+    params = {
+        "action": "query",
+        "titles": title,
+        "prop": "pageimages",
+        "format": "json",
+        "pithumbsize": 800,
+        "pilicense": "any",
+    }
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=12),
+            headers=_WIKI_HEADERS,
+        ) as session:
+            async with session.get(
+                f"https://{lang}.wikipedia.org/w/api.php", params=params
+            ) as resp:
+                if resp.status != 200:
+                    return ""
+                data = await resp.json(content_type=None)
+    except Exception as exc:
+        logger.warning("wiki pageimage %s: %s", title[:60], exc)
+        return ""
+
+    pages = (data.get("query") or {}).get("pages") or {}
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        thumb = page.get("thumbnail") or {}
+        if isinstance(thumb, dict):
+            src = str(thumb.get("source") or "").strip()
+            if src.startswith("https://"):
+                return src
+    return ""
+
+
 async def wikipedia_summary_bundle(wiki_url: str) -> dict[str, str]:
     m = _WIKI_PAGE_RE.search(wiki_url)
     if not m:
@@ -466,10 +538,12 @@ async def wikipedia_summary_bundle(wiki_url: str) -> dict[str, str]:
     )
     try:
         async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=12)
+            timeout=aiohttp.ClientTimeout(total=12),
+            headers=_WIKI_HEADERS,
         ) as session:
             async with session.get(api_url) as resp:
                 if resp.status != 200:
+                    logger.warning("wiki summary HTTP %s for %s", resp.status, wiki_url[:80])
                     return {}
                 data = await resp.json(content_type=None)
     except Exception as exc:
@@ -479,10 +553,9 @@ async def wikipedia_summary_bundle(wiki_url: str) -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
 
-    thumb = data.get("thumbnail") or {}
-    photo = ""
-    if isinstance(thumb, dict):
-        photo = str(thumb.get("source") or "").strip()
+    photo = _wiki_photo_from_summary(data)
+    if not photo:
+        photo = await wikipedia_pageimage_url(lang, title_slug)
 
     extract = str(data.get("extract") or data.get("description") or "").strip()
     return {
@@ -492,6 +565,27 @@ async def wikipedia_summary_bundle(wiki_url: str) -> dict[str, str]:
         "lang": lang,
         "url": wiki_url,
     }
+
+
+async def download_image_bytes(url: str, *, max_bytes: int = 8_000_000) -> bytes | None:
+    if not url.startswith("https://"):
+        return None
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=20),
+            headers=_WIKI_HEADERS,
+        ) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.warning("image download HTTP %s %s", resp.status, url[:100])
+                    return None
+                data = await resp.read()
+                if not data or len(data) > max_bytes:
+                    return None
+                return data
+    except Exception as exc:
+        logger.warning("image download %s: %s", url[:100], exc)
+        return None
 
 
 async def fetch_pages_from_urls(
@@ -514,17 +608,21 @@ async def fetch_pages_from_urls(
 async def fetch_knowledge_pages(
     query: str,
     results: list[dict[str, Any]],
-) -> tuple[list[tuple[str, dict[str, str]]], str | None, dict[str, str]]:
-    """Википедия + 2 других сайта; картинка и текст статьи с Вики."""
+) -> tuple[list[tuple[str, dict[str, str]]], bytes | None, dict[str, str]]:
+    """Википедия + 2 других сайта; картинка (байты) и текст статьи с Вики."""
     wiki_url = _pick_wikipedia_url(results)
     if not wiki_url:
         wiki_url = await wikipedia_opensearch(query)
 
     wiki_extra: dict[str, str] = {}
-    photo_url: str | None = None
+    photo_bytes: bytes | None = None
     if wiki_url:
         wiki_extra = await wikipedia_summary_bundle(wiki_url)
-        photo_url = wiki_extra.get("thumbnail") or None
+        photo_url = str(wiki_extra.get("thumbnail") or "").strip()
+        if photo_url:
+            photo_bytes = await download_image_bytes(photo_url)
+            if not photo_bytes:
+                logger.warning("wiki image bytes empty for %s", photo_url[:100])
 
     urls: list[str] = []
     if wiki_url:
@@ -539,7 +637,7 @@ async def fetch_knowledge_pages(
         ]
 
     pages = await fetch_pages_from_urls(urls[:3])
-    return pages, photo_url, wiki_extra
+    return pages, photo_bytes, wiki_extra
 
 
 async def fetch_top_pages(

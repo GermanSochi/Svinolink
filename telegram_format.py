@@ -6,7 +6,7 @@ import re
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,22 @@ def _plain_chunks(text: str, *, max_len: int) -> list[str]:
         parts.append(rest[:max_len])
         rest = rest[max_len:]
     return parts
+
+
+async def reply_photo_then_text(
+    message: Message,
+    text: str,
+    photo_bytes: bytes | None,
+) -> None:
+    """Сначала фото (файлом), потом текст с разметкой."""
+    if photo_bytes:
+        try:
+            await message.reply_photo(
+                BufferedInputFile(photo_bytes, filename="wiki.jpg"),
+            )
+        except Exception as exc:
+            logger.warning("reply_photo failed: %s", exc)
+    await reply_formatted(message, text)
 
 
 async def reply_formatted(

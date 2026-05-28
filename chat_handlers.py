@@ -15,7 +15,7 @@ from config import settings
 from deps import gpt, store
 from chat_examples import chat_examples_markdown
 from chat_user_log import user_messages_markdown
-from telegram_format import reply_formatted
+from telegram_format import reply_formatted, reply_photo_then_text
 from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
 # Мемы/видосы отключены — оставляем импорты закомментированными на будущее.
@@ -373,12 +373,9 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
 
         web_reply = await try_web_search_reply(message)
         if web_reply:
-            if web_reply.photo_url:
-                try:
-                    await message.reply_photo(web_reply.photo_url)
-                except Exception as exc:
-                    logger.warning("wiki photo send failed: %s", exc)
-            await reply_formatted(message, web_reply.text)
+            await reply_photo_then_text(
+                message, web_reply.text, web_reply.photo_bytes
+            )
             return
         # только ссылка без «Свин» — ниже уйдёт в GPT; IG ловится отдельным хендлером
 
