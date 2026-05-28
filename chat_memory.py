@@ -450,73 +450,37 @@ async def fetch_messages_by_user(
     phrase: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Сообщения ника за период с точным временем (локальная TZ → UTC в запросе)."""
-    from chat_time import utc_bounds_for_query
+    """Сообщения участника за период (ник + все производные имён из ростра)."""
+    from chat_roster import expand_search_patterns
 
-    needle = username.strip().lstrip("@")
-    if len(needle) < 2:
-        return []
+    patterns = [p.lower() for p in expand_search_patterns(username)]
+    if not patterns and len(username.strip()) >= 2:
+        patterns = [username.strip().lstrip("@").lower()]
 
-    start_utc, end_utc = utc_bounds_for_query(
-        period,
+    rows = await fetch_period_messages(
+        chat_id,
+        period=period,
         hour_from=hour_from,
         hour_to=hour_to,
         minute_from=minute_from,
         minute_to=minute_to,
+        limit=500,
     )
 
-    query = """
-        SELECT username, message_text, created_at
-        FROM chat_history
-        WHERE chat_id = $1
-          AND created_at >= $2
-          AND created_at <= $3
-          AND username ILIKE '%' || $4 || '%'
-          AND ($5::text IS NULL OR message_text ILIKE '%' || $5 || '%')
-        ORDER BY created_at ASC
-        LIMIT $6
-    """
-    phrase_arg = phrase.strip() if phrase else None
-    if phrase_arg and len(phrase_arg) < 2:
-        phrase_arg = None
+    phrase_low = phrase.strip().lower() if phrase else None
+    if phrase_low and len(phrase_low) < 2:
+        phrase_low = None
 
-    if _pool is not None:
-        async with _pool.acquire() as conn:
-            rows = await conn.fetch(
-                query,
-                chat_id,
-                start_utc,
-                end_utc,
-                needle,
-                phrase_arg,
-                limit,
-            )
-    else:
-        url = database_url()
-        if not url:
-            return []
-        conn = await _connect_once(url)
-        try:
-            rows = await conn.fetch(
-                query,
-                chat_id,
-                start_utc,
-                end_utc,
-                needle,
-                phrase_arg,
-                limit,
-            )
-        finally:
-            await conn.close()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        un = (row.get("username") or "").lower()
+        if not any(p in un or un == p for p in patterns):
+            continue
+        if phrase_low and phrase_low not in str(row.get("message_text", "")).lower():
+            continue
+        out.append(row)
 
-    return [
-        {
-            "username": row["username"] or "Аноним",
-            "message_text": row["message_text"],
-            "created_at": row["created_at"],
-        }
-        for row in rows
-    ]
+    return out[:limit]
 
 
 async def fetch_period_messages(

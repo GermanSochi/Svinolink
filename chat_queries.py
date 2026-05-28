@@ -4,7 +4,16 @@ from __future__ import annotations
 import re
 
 from chat_query_models import UserLogQuery
+from chat_roster import resolve_member
 from chat_time import parse_time_range
+
+
+def _user_fields(raw: str) -> tuple[str, str | None]:
+    """Telegram-ник для поиска + красивое имя для ответа."""
+    member = resolve_member(raw)
+    if member:
+        return member.telegram, member.label
+    return raw, None
 
 CHAT_EXAMPLES_RE = re.compile(
     r"(?i)(?:"
@@ -163,8 +172,10 @@ def parse_user_log_request(text: str) -> UserLogQuery | None:
         raw = (wm.group("u") or "").strip().lstrip("@")
         phrase = (wm.group("phrase") or "").strip(" ?!.,")
         if raw and phrase and raw.lower() not in _USER_LOG_STOP:
+            tg, label = _user_fields(raw)
             return UserLogQuery(
-                username=raw,
+                username=tg,
+                display_name=label,
                 period=period,
                 hour_from=hf,
                 hour_to=ht,
@@ -191,8 +202,10 @@ def parse_user_log_request(text: str) -> UserLogQuery | None:
                 cand = mp.group(1).strip(" ?!.,")
                 if cand and len(cand) < 120 and not re.search(r"(?i)\b(?:с|до)\s+\d", cand):
                     phrase = cand
+            tg, label = _user_fields(raw)
             return UserLogQuery(
-                username=raw,
+                username=tg,
+                display_name=label,
                 period=period,
                 hour_from=hf,
                 hour_to=ht,
@@ -232,6 +245,9 @@ def extract_who_is_name(text: str) -> str | None:
     name = m.group(1).strip(" ?!.,")
     if len(name) < 2:
         return None
+    member = resolve_member(name)
+    if member:
+        return member.label
     return name
 
 

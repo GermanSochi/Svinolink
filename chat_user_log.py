@@ -12,6 +12,7 @@ from chat_memory import (
 )
 from chat_queries import parse_user_log_request
 from chat_query_models import UserLogQuery
+from chat_roster import format_member_bullet, resolve_member
 from chat_time import format_ts_local
 
 _PERIOD_LABEL = {
@@ -82,12 +83,20 @@ async def _all_users_markdown(chat_id: int, q: UserLogQuery) -> str:
         f"👥 Участников в базе: **{len(names)}**\n",
     ]
 
+    def _heading(db_name: str, count: int | None = None) -> str:
+        m = resolve_member(db_name)
+        if m:
+            return format_member_bullet(m, msg_count=count)
+        if count is None:
+            return f"🔹 **{db_name}**"
+        return f"🔹 **{db_name}** — **{count}** сообщ."
+
     for name in names:
         msgs = by_user.get(name, [])
         if not msgs:
-            lines.append(f"\n🔹 **{name}** — **молчал**\n")
+            lines.append(f"\n{_heading(name)} — **молчал**\n")
             continue
-        lines.append(f"\n🔹 **{name}** — **{len(msgs)}** сообщ.\n")
+        lines.append(f"\n{_heading(name, len(msgs))}\n")
         for row in msgs[:12]:
             lines.append(f"   {_format_row(row)}\n")
         if len(msgs) > 12:
@@ -102,8 +111,18 @@ async def _all_users_markdown(chat_id: int, q: UserLogQuery) -> str:
     return "\n".join(lines)
 
 
+def _display_title(q: UserLogQuery) -> str:
+    if q.display_name:
+        return f"**{q.display_name}** (`@{q.username}`)"
+    m = resolve_member(q.username or "")
+    if m:
+        return f"**{m.label}** (`@{m.telegram}`)"
+    return f"**{q.username}**"
+
+
 async def _one_user_markdown(chat_id: int, q: UserLogQuery) -> str:
     assert q.username
+    title = _display_title(q)
     rows = await fetch_messages_by_user(
         chat_id,
         q.username,
@@ -122,20 +141,18 @@ async def _one_user_markdown(chat_id: int, q: UserLogQuery) -> str:
         if q.phrase:
             extra = f"\n\n🔍 Фраза «{q.phrase}» за этот интервал не найдена."
         return (
-            f"🐷 У **{q.username}** за **{window}** в базе **нет сообщений**.{extra}\n\n"
-            "💬 Спроси **«кто в чате»** — сверь ник.\n\n"
-            "👥 Или **«кто что писал вчера»** — сводка по всем."
+            f"🐷 У {title} за **{window}** в базе **нет сообщений**.{extra}\n\n"
+            "💬 Спроси **«Свин, кто в чате»** — имена и ники.\n\n"
+            "👥 Или **«Свин, кто что писал вчера»** — сводка по всем."
         )
 
     if q.when_only and q.phrase:
         header = (
-            f"🐷 **{q.username}** — **во сколько** про «{q.phrase}» "
+            f"🐷 {title} — **во сколько** про «{q.phrase}» "
             f"({window}, {len(rows)} совпад.)\n"
         )
     else:
-        header = (
-            f"🐷 **{q.username}** — сообщения **{window}** ({len(rows)} шт.)\n"
-        )
+        header = f"🐷 {title} — сообщения **{window}** ({len(rows)} шт.)\n"
 
     lines = [header]
     emojis = ("💬", "📝", "🗨️", "📌", "🔹", "✨", "🎯", "📎", "🧩", "🐽")

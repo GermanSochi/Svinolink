@@ -23,6 +23,7 @@ from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, pa
 from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview, extract_plain_text
 from chat_queries import is_who_in_chat_question
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory, who_in_chat_reply
+from personality_commands import try_personality_or_roster
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
 from yandex_router import route_intent
@@ -104,12 +105,7 @@ class InstagramAnyFilter(BaseFilter):
 IG_LINK_FILTER = InstagramAnyFilter()
 
 
-def is_admin_user(user_id: int, username: str | None) -> bool:
-    if user_id in settings.admin_ids:
-        return True
-    if username and username.lower().lstrip("@") in settings.admin_usernames:
-        return True
-    return False
+from admin_auth import is_admin_user  # noqa: F401 — re-export для старых импортов
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
@@ -373,6 +369,11 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
 
         if is_capabilities_question(text):
             await reply_formatted(message, capabilities_markdown())
+            return
+
+        tone_reply = await try_personality_or_roster(message)
+        if tone_reply:
+            await reply_formatted(message, tone_reply)
             return
 
         if is_who_in_chat_question(text):

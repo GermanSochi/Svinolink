@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ai_quota import reset_user
-from chat_handlers import is_admin_user
+from admin_auth import is_admin_user
 from config import settings
 
 router = Router(name="admin_panel")
@@ -54,7 +54,12 @@ async def cmd_admin(message: Message) -> None:
     "Панель GERSOCHI\n\n"
     "/admin_stats — статистика\n"
     "/admin_reset USER_ID — сброс ИИ-лимита «свин»\n"
-    "/admin_broadcast текст — только в личку тебе (тест)",
+    "/admin_broadcast текст — только в личку тебе (тест)\n\n"
+    "🎭 **Тон в групповом чате** (только админ, прямо в группе):\n"
+    "🔹 `Свин уровень юмора 40 процентов`\n"
+    "🔹 `Свин уровень токсичности 25 процентов`\n"
+    "🔹 `Свин уровни` — текущие значения\n\n"
+    "Шкала **1–100**. Юмор и подкол настраиваются отдельно.",
     reply_markup=_admin_kb(),
   )
 

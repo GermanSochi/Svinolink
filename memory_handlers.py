@@ -22,6 +22,8 @@ from chat_queries import (
 )
 from chat_style import build_style_system_appendix, get_style_notes
 from deps import gpt, store
+from chat_personality import tone_appendix_for_chat
+from chat_roster import MEMBERS, format_member_bullet
 from svin_system_prompt import SVIN_SYSTEM_PROMPT
 from telegram_format import reply_formatted
 
@@ -113,40 +115,68 @@ def _period_label(period: str) -> str:
     }.get(period, "за период")
 
 
+def _msg_count_for_member(
+    member_telegram: str, counts: dict[str, int]
+) -> int | None:
+    key = member_telegram.lower()
+    if key in counts:
+        return counts[key]
+    for un, cnt in counts.items():
+        if key in un or un in key:
+            return cnt
+    return None
+
+
 async def who_in_chat_reply(chat_id: int) -> str | None:
-    """Прямой ответ по никам из Supabase — без GPT (не уходит в IT-фантазии)."""
+    """Ростер имён + счётчики из Supabase — без GPT."""
     if not is_memory_enabled():
         return (
             "🐷 Память чата не настроена — не вижу, кто писал.\n\n"
             "🎞️ Зато ссылки Instagram кидай — видео пришлю."
         )
+
     people = await fetch_chat_participants(chat_id)
-    if not people:
+    counts: dict[str, int] = {}
+    for p in people:
+        un = str(p["username"])
+        if un.lower().startswith("user_"):
+            continue
+        counts[un.lower()] = int(p["msg_count"])
+
+    lines: list[str] = []
+    roster_keys = {m.telegram.lower() for m in MEMBERS}
+
+    for m in MEMBERS:
+        cnt = _msg_count_for_member(m.telegram, counts)
+        lines.append(format_member_bullet(m, msg_count=cnt))
+
+    for un, cnt in sorted(counts.items(), key=lambda x: -x[1]):
+        if any(rk in un or un in rk for rk in roster_keys):
+            continue
+        lines.append(f"🔹 **{un}** — **{cnt}** сообщ.")
+
+    if not lines and not people:
         return (
             "🐷 В базе пока пусто — напишите в чат пару сообщений, и я запомню ники.\n\n"
             "🎞️ А ссылку на reel/post кидай — скину видео."
         )
-    lines: list[str] = []
-    for p in people:
-        name = str(p["username"])
-        if name.lower().startswith("user_"):
-            continue
-        lines.append(f"🔹 **{name}** — {int(p['msg_count'])} сообщ.")
-    if not lines:
-        for p in people:
-            lines.append(f"🔹 **{p['username']}**")
+
     body = "\n\n".join(lines[:40])
     return (
-        "🐷 **Кто писал в чате** (по памяти за последние дни):\n\n"
+        "🐷 **Кто в чате** (имя → ник, активность за последние дни):\n\n"
         f"{body}\n\n"
-        "💬 Список из переписки, не выдумка."
+        "💬 «Свин, что писал вчера Дима» — по имени или нику."
     )
 
 
 async def svin_system_for_chat(chat_id: int) -> str:
-    """System prompt + кэш стиля группы (без полной истории)."""
+    """System prompt + кэш стиля группы + юмор/подкол (без полной истории)."""
     notes = await get_style_notes(chat_id)
-    return SVIN_SYSTEM_PROMPT + build_style_system_appendix(notes)
+    return (
+        SVIN_SYSTEM_PROMPT
+        + build_style_system_appendix(notes)
+        + tone_appendix_for_chat(chat_id)
+    )
 
 
 async def _memory_sections(chat_id: int, user_text: str) -> list[str]:
@@ -165,6 +195,11 @@ async def _memory_sections(chat_id: int, user_text: str) -> list[str]:
 
     if is_who_in_chat_question(user_text):
         people = await fetch_chat_participants(chat_id)
+        roster_lines = [
+            f"- {m.label} (@{m.telegram}), искать также: {', '.join(m.aliases[:6])}"
+            for m in MEMBERS
+        ]
+        sections.append("Ростер чата (фиксированный состав):\n" + "\n".join(roster_lines))
         if people:
             lines = [
                 f"- {p['username']} ({p['msg_count']} сообщ.)"
@@ -174,7 +209,7 @@ async def _memory_sections(chat_id: int, user_text: str) -> list[str]:
             if not lines:
                 lines = [f"- {p['username']}" for p in people]
             sections.append(
-                "Участники чата (уникальные ники из Supabase за последние дни):\n"
+                "Участники в Supabase (ники и активность за последние дни):\n"
                 + "\n".join(lines)
             )
         else:
@@ -184,7 +219,20 @@ async def _memory_sections(chat_id: int, user_text: str) -> list[str]:
 
     who = extract_who_is_name(user_text)
     if who:
-        hits = await search_history_mentions(chat_id, who, limit=20)
+        from chat_roster import expand_search_patterns
+
+        hits: list[dict] = []
+        seen: set[tuple] = set()
+        for needle in expand_search_patterns(who)[:10]:
+            for h in await search_history_mentions(chat_id, needle, limit=15):
+                key = (h.get("created_at"), h.get("message_text"), h.get("username"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                hits.append(h)
+            if len(hits) >= 20:
+                break
+        hits = hits[:20]
         if hits:
             from chat_time import format_ts_local
             from datetime import datetime
