@@ -93,9 +93,15 @@ def should_silent_log(text: str) -> bool:
 
 
 def build_transcript(rows: list[dict[str, object]]) -> str:
-    return "\n".join(
-        f"[{row['username']}]: {row['message_text']}" for row in rows
-    )
+    from chat_time import format_ts_local
+    from datetime import datetime
+
+    out: list[str] = []
+    for row in rows:
+        ts = row.get("created_at")
+        clock = format_ts_local(ts if isinstance(ts, datetime) else None)
+        out.append(f"[{clock}] {row['username']}: {row['message_text']}")
+    return "\n".join(out)
 
 
 def _period_label(period: str) -> str:
@@ -180,8 +186,12 @@ async def _memory_sections(chat_id: int, user_text: str) -> list[str]:
     if who:
         hits = await search_history_mentions(chat_id, who, limit=20)
         if hits:
+            from chat_time import format_ts_local
+            from datetime import datetime
+
             quotes = "\n".join(
-                f"[{h['username']}]: {str(h['message_text'])[:300]}"
+                f"[{format_ts_local(h['created_at'] if isinstance(h.get('created_at'), datetime) else None)}] "
+                f"{h['username']}: {str(h['message_text'])[:300]}"
                 for h in reversed(hits)
             )
             sections.append(

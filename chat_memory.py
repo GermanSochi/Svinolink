@@ -22,8 +22,25 @@ CREATE TABLE IF NOT EXISTS chat_history (
     user_id BIGINT NOT NULL,
     username TEXT,
     message_text TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+"""
+
+MIGRATE_CREATED_AT_TZ_SQL = """
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'chat_history'
+      AND column_name = 'created_at'
+      AND data_type = 'timestamp without time zone'
+  ) THEN
+    ALTER TABLE chat_history
+      ALTER COLUMN created_at TYPE TIMESTAMPTZ
+      USING created_at AT TIME ZONE 'UTC';
+  END IF;
+END $$;
 """
 
 CREATE_INDEX_SQL = """
@@ -237,6 +254,7 @@ async def init_chat_memory() -> None:
         _pool = await _open_pool(url)
         async with _pool.acquire() as conn:
             await conn.execute(CREATE_TABLE_SQL)
+            await conn.execute(MIGRATE_CREATED_AT_TZ_SQL)
             await conn.execute(CREATE_INDEX_SQL)
             from chat_style import ensure_style_table
             from trigger_supabase import ensure_trigger_tables
@@ -425,46 +443,69 @@ async def fetch_messages_by_user(
     username: str,
     *,
     period: str = "yesterday",
-    limit: int = 40,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    minute_from: int = 0,
+    minute_to: int = 59,
+    phrase: str | None = None,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Сообщения одного ника за день (today/yesterday/day_before/24h)."""
+    """Сообщения ника за период с точным временем (локальная TZ → UTC в запросе)."""
+    from chat_time import utc_bounds_for_query
+
     needle = username.strip().lstrip("@")
     if len(needle) < 2:
         return []
 
-    tz = _tz()
-    local_day = f"(created_at AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date"
-    today_local = f"(NOW() AT TIME ZONE '{tz}')::date"
+    start_utc, end_utc = utc_bounds_for_query(
+        period,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        minute_from=minute_from,
+        minute_to=minute_to,
+    )
 
-    if period == "today":
-        where = f"{local_day} = {today_local}"
-    elif period == "yesterday":
-        where = f"{local_day} = {today_local} - 1"
-    elif period == "day_before":
-        where = f"{local_day} = {today_local} - 2"
-    else:
-        where = "created_at >= NOW() - INTERVAL '24 hours'"
-
-    query = f"""
+    query = """
         SELECT username, message_text, created_at
         FROM chat_history
         WHERE chat_id = $1
-          AND {where}
-          AND username ILIKE '%' || $2 || '%'
+          AND created_at >= $2
+          AND created_at <= $3
+          AND username ILIKE '%' || $4 || '%'
+          AND ($5::text IS NULL OR message_text ILIKE '%' || $5 || '%')
         ORDER BY created_at ASC
-        LIMIT $3
+        LIMIT $6
     """
+    phrase_arg = phrase.strip() if phrase else None
+    if phrase_arg and len(phrase_arg) < 2:
+        phrase_arg = None
 
     if _pool is not None:
         async with _pool.acquire() as conn:
-            rows = await conn.fetch(query, chat_id, needle, limit)
+            rows = await conn.fetch(
+                query,
+                chat_id,
+                start_utc,
+                end_utc,
+                needle,
+                phrase_arg,
+                limit,
+            )
     else:
         url = database_url()
         if not url:
             return []
         conn = await _connect_once(url)
         try:
-            rows = await conn.fetch(query, chat_id, needle, limit)
+            rows = await conn.fetch(
+                query,
+                chat_id,
+                start_utc,
+                end_utc,
+                needle,
+                phrase_arg,
+                limit,
+            )
         finally:
             await conn.close()
 

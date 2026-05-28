@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import re
 
+from chat_query_models import UserLogQuery
+from chat_time import parse_time_range
+
 CHAT_EXAMPLES_RE = re.compile(
     r"(?i)(?:"
     r"примеры?\s+(?:из\s+)?(?:чат|баз|переписк|истори|супер)"
@@ -45,6 +48,15 @@ _USER_LOG_RE = re.compile(
     r"(?:\s+(?:вчера|сегодня|позавчера))?"
     r")"
 )
+
+_WHEN_SAID_RE = re.compile(
+    r"(?i)во\s+сколько\s+"
+    r"(?:(?:вчера|сегодня|позавчера)\s+)?"
+    r"(?P<u>[@\w][\w.-]{1,31})\s+"
+    r"(?:сказал|писал|написал|говорил)\s+(?P<phrase>.+?)[\?\.!,]*$"
+)
+
+_TIME_ONLY_RE = re.compile(r"(?i)(?:во\s+сколько|в\s+какое\s+время)")
 
 _USER_LOG_STOP = frozenset(
     {
@@ -117,27 +129,67 @@ def is_who_in_chat_question(text: str) -> bool:
     return bool(_WHO_IN_CHAT_RE.search(text.strip()))
 
 
-def parse_user_log_request(text: str) -> tuple[str, str] | None:
+def parse_user_log_request(text: str) -> UserLogQuery | None:
     """
-    «что писал вчера Tom_Frod» → (username, period).
-    Ответ из Supabase без Yandex GPT.
+    «что писал вчера Tom_Frod с 15 до 18» / «во сколько вчера Tom сказал …»
+    → UserLogQuery. Ответ из Supabase без Yandex GPT.
     """
     blob = re.sub(r"(?i)^(?:свин|свинья)[\s,!?.\-]+", "", text.strip()).strip()
     if not blob:
         return None
     lower = blob.lower()
-    if not any(w in lower for w in ("писал", "написал", "говорил", "сказал", "сообщен")):
+    period = detect_history_period(blob)
+    hf, ht, mf, mt = parse_time_range(blob)
+
+    wm = _WHEN_SAID_RE.search(blob)
+    if wm:
+        raw = (wm.group("u") or "").strip().lstrip("@")
+        phrase = (wm.group("phrase") or "").strip(" ?!.,")
+        if raw and phrase and raw.lower() not in _USER_LOG_STOP:
+            return UserLogQuery(
+                username=raw,
+                period=period,
+                hour_from=hf,
+                hour_to=ht,
+                minute_from=mf,
+                minute_to=mt,
+                phrase=phrase,
+                when_only=True,
+            )
+
+    if not any(
+        w in lower
+        for w in ("писал", "написал", "говорил", "сказал", "сообщен", "сколько", "время")
+    ):
         return None
 
     m = _USER_LOG_RE.search(blob)
     if not m:
+        if _TIME_ONLY_RE.search(blob) and hf is not None:
+            return None
         return None
 
     raw = (m.group("u") or m.group("u2") or m.group("u3") or "").strip().lstrip("@")
     if not raw or raw.lower() in _USER_LOG_STOP:
         return None
 
-    return raw, detect_history_period(blob)
+    phrase = None
+    mp = re.search(r"(?i)\bпро\s+(.+?)[\?\.!,]*$", blob)
+    if mp:
+        cand = mp.group(1).strip(" ?!.,")
+        if cand and len(cand) < 120 and not re.search(r"(?i)\b(?:с|до)\s+\d", cand):
+            phrase = cand
+
+    return UserLogQuery(
+        username=raw,
+        period=period,
+        hour_from=hf,
+        hour_to=ht,
+        minute_from=mf,
+        minute_to=mt,
+        phrase=phrase or None,
+        when_only=False,
+    )
 
 
 def is_user_log_request(text: str) -> bool:

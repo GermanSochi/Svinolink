@@ -1,7 +1,10 @@
 """Прямые ответы «примеры из чата» — без Yandex GPT."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from chat_memory import fetch_recent, is_memory_enabled
+from chat_time import format_ts_local
 
 
 async def chat_examples_markdown(chat_id: int, *, limit: int = 12) -> str:
@@ -26,7 +29,9 @@ async def chat_examples_markdown(chat_id: int, *, limit: int = 12) -> str:
         name = str(row["username"] or "Аноним")
         text = str(row["message_text"]).replace("\n", " ")
         mark = emojis[i % len(emojis)]
-        lines.append(f"{mark} **{name}**: {text}\n")
+        ts = row.get("created_at")
+        clock = format_ts_local(ts if isinstance(ts, datetime) else None)
+        lines.append(f"{mark} 🕐 **{clock}** · **{name}**: {text}\n")
 
     lines.append("\n✅ Это **реальные строки** из chat_history — без выдумок GPT.")
     return "\n".join(lines)
