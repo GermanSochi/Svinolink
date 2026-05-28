@@ -24,6 +24,7 @@ from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_previe
 from chat_queries import is_who_in_chat_question
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory, who_in_chat_reply
 from personality_commands import try_personality_or_roster
+from web_search_handlers import try_web_search_reply
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
 from yandex_router import route_intent
@@ -369,6 +370,11 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
 
         if is_capabilities_question(text):
             await reply_formatted(message, capabilities_markdown())
+            return
+
+        web_reply = await try_web_search_reply(message)
+        if web_reply:
+            await reply_formatted(message, web_reply)
             return
 
         tone_reply = await try_personality_or_roster(message)

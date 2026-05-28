@@ -10,6 +10,7 @@ pypdf>=4.2
 openpyxl>=3.1
 python-docx>=1.1
 edge-tts>=6.1
+ddgs>=9.0
 pillow>=10.4
 moviepy>=1.0.3
 yt-dlp>=2025.0.0
