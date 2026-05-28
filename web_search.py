@@ -86,6 +86,16 @@ def _clean_query(raw: str) -> str:
     return q[:300]
 
 
+def ddg_search_query(display_query: str) -> str:
+    """Запрос в DuckDuckGo — без «что такое», чтобы сниппеты были по делу."""
+    q = _clean_query(display_query)
+    if not q:
+        return display_query
+    s = re.sub(r"(?i)^(?:что|кто)\s+такое\s+", "", q)
+    s = re.sub(r"(?i)^(?:расскажи|объясни)\s+(?:про\s+)?", "", s)
+    return s.strip() or q
+
+
 def _search_sync(query: str, *, max_results: int = 5) -> list[dict[str, Any]]:
     from ddgs import DDGS
 
@@ -162,9 +172,10 @@ async def search_web(query: str, *, max_results: int = 6) -> list[dict[str, Any]
     if not q:
         return []
 
+    ddg_q = ddg_search_query(q)
     try:
         rows = await asyncio.wait_for(
-            asyncio.to_thread(_search_sync, q, max_results=max_results),
+            asyncio.to_thread(_search_sync, ddg_q, max_results=max_results),
             timeout=20,
         )
         if rows:
@@ -172,7 +183,7 @@ async def search_web(query: str, *, max_results: int = 6) -> list[dict[str, Any]
     except Exception as exc:
         logger.warning("ddgs search failed: %s", exc)
 
-    return await _instant_answer_fallback(q)
+    return await _instant_answer_fallback(ddg_q)
 
 
 def format_search_markdown(
@@ -243,19 +254,64 @@ def wrap_short_answer(query: str, answer: str) -> str:
 
 
 SEARCH_SYNTHESIS_SYSTEM = """
-Ты — Свин, свой в чате друзей. Тебе дали выжимки из поиска в интернете.
+Ты — Свин, свой в чате друзей. Ниже — фрагменты из поиска в интернете (сниппеты и страницы).
 
-Задача: один короткий ответ по-русски, как устное объяснение в чате.
+Задача: один короткий ответ по-русски, как будто сам гуглил и объясняешь в чате.
 
 Правила:
-- 3–5 предложений, без воды и без списков из пяти пунктов
+- 3–5 предложений, без воды и без длинных списков
 - БЕЗ ссылок, URL, «источник:», «по данным сайта…»
-- Сведи факты из разных выжимок в одну версию; противоречия — осторожно («ходят версии…»)
-- Не выдумывай то, чего нет в выжимках
-- Если это народное прозвище/мем — объясни суть простыми словами
-- Можно **жирным** выделить 1–2 ключевых слова
-- Без «Я ИИ», без отказов
+- Сведи факты из фрагментов в одну версию; противоречия — осторожно («ходят версии…»)
+- Не выдумывай факты, которых нет во фрагментах ниже
+- Если тема косвенно есть (синонимы, соседние слова) — свяжи и объясни простыми словами
+- Народное прозвище, мем, сленг — объясни суть
+
+ЗАПРЕЩЕНО в ответе пользователю:
+- слова «выжимка», «предоставлен», «в материалах», «в сниппетах», «в источниках»
+- фразы «нет информации в …» — вместо этого: «в сети мало пишут» или перескажи близкое из фрагментов
+- отказы и мета-объяснения про то, как тебе дали данные
+
+Можно **жирным** 1–2 слова. Без «Я ИИ».
 """.strip()
+
+
+_META_REFUSAL_RE = re.compile(
+    r"(?i)("
+    r"выжимк"
+    r"|предоставленн"
+    r"|в\s+(?:этих\s+)?(?:материалах|источниках|сниппетах|фрагментах)"
+    r"|нет\s+(?:в\s+)?(?:информации|данных)"
+    r"|не\s+наш[её]л\s+(?:ничего|информации|упоминан)"
+    r"|отсутствует\s+информация"
+    r")"
+)
+
+
+def is_meta_refusal_answer(text: str) -> bool:
+    return bool(_META_REFUSAL_RE.search(text))
+
+
+def build_snippet_fallback(query: str, results: list[dict[str, Any]]) -> str:
+    """Ответ из сниппетов DDG, если GPT ушёл в «нет в выжимках»."""
+    parts: list[str] = []
+    for row in results[:3]:
+        title = str(row.get("title") or "").strip()
+        body = str(row.get("body") or row.get("snippet") or "").strip()
+        if title and body:
+            parts.append(f"{title}: {body}")
+        elif body:
+            parts.append(body)
+        elif title:
+            parts.append(title)
+    if not parts:
+        return (
+            f"🐷 **«{query}»**\n\n"
+            "В поиске пусто — попробуй короче, например: **«автомобиль пирожок»**."
+        )
+    merged = " ".join(parts)
+    if len(merged) > 950:
+        merged = merged[:950].rsplit(" ", 1)[0] + "…"
+    return f"🐷 **«{query}»**\n\n{merged}"
 
 
 async def fetch_top_pages(
