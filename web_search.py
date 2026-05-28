@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 from typing import Any
+from urllib.parse import quote, unquote
 
 import aiohttp
 
@@ -39,6 +40,25 @@ _SHORTHAND = re.compile(
 )
 
 _SVIN_PREFIX = re.compile(r"(?i)^(свин|свинья)[\s,!?.\-]*")
+
+_WIKI_PAGE_RE = re.compile(
+    r"https?://(?P<lang>[a-z]{2})\.wikipedia\.org/wiki/(?P<title>[^#?]+)",
+    re.IGNORECASE,
+)
+
+_KNOWLEDGE_SKIP = re.compile(
+    r"(?is)(?:"
+    r"что\s+было"
+    r"|кто\s+в\s+чате"
+    r"|кто\s+что\s+писал"
+    r"|что\s+писал"
+    r"|во\s+сколько"
+    r"|примеры\s+из\s+чата"
+    r"|триггер"
+    r"|что\s+ты\s+умеешь"
+    r"|что\s+умеешь"
+    r")"
+)
 
 
 def is_web_search_request(text: str | None) -> bool:
@@ -76,6 +96,42 @@ def extract_search_query(text: str) -> str | None:
         if q:
             return q
     return None
+
+
+def extract_knowledge_query(text: str) -> str | None:
+    """
+  «Свин, что такое …» / «как сделать …» без «найди в интернете» —
+  тоже идём в сеть (Википедия + топ страниц).
+    """
+    blob = _SVIN_PREFIX.sub("", text.strip()).strip()
+    if not blob or _KNOWLEDGE_SKIP.search(blob):
+        return None
+    if extract_search_query(text):
+        return None
+
+    for pat in (
+        r"(?is)^(?:что|кто)\s+так(?:ое|ой|ая)\s+(.+)$",
+        r"(?is)^(?:расскажи|объясни)\s+(?:(?:мне\s+)?(?:про|о)\s+)?(.+)$",
+        r"(?is)^как\s+(?:правильно\s+)?(?:сделать|делать|приготовить|починить|"
+        r"установить|настроить|пользоваться|работает)\s+(.+)$",
+    ):
+        m = re.match(pat, blob)
+        if m:
+            q = _clean_query(m.group(1))
+            if q:
+                return q
+    return None
+
+
+def resolve_search_query(text: str) -> tuple[str | None, bool]:
+    """(запрос, режим_энциклопедии: википедия + картинка + развёрнутый ответ)."""
+    q = extract_search_query(text)
+    if q:
+        return q, True
+    q = extract_knowledge_query(text)
+    if q:
+        return q, True
+    return None, False
 
 
 def _clean_query(raw: str) -> str:
@@ -219,8 +275,15 @@ def build_search_evidence(
     query: str,
     results: list[dict[str, Any]],
     pages: list[tuple[str, dict[str, str]]],
+    *,
+    wiki_extra: dict[str, str] | None = None,
 ) -> str:
     parts = [f"Запрос: {query}\n"]
+    if wiki_extra and wiki_extra.get("extract"):
+        title = wiki_extra.get("title") or "Википедия"
+        parts.append(
+            f"\n[Википедия — {title}]\n{wiki_extra['extract'][:1400]}"
+        )
     for i, row in enumerate(results, 1):
         title = str(row.get("title") or "").strip()
         body = str(row.get("body") or row.get("snippet") or "").strip()
@@ -246,11 +309,27 @@ def _strip_urls(text: str) -> str:
     return re.sub(r"https?://\S+", "", text).strip()
 
 
-def wrap_short_answer(query: str, answer: str) -> str:
+def wrap_short_answer(query: str, answer: str, *, max_len: int = 1100) -> str:
     body = _strip_urls(answer.strip())
-    if len(body) > 1100:
-        body = body[:1100].rsplit(" ", 1)[0] + "…"
+    if len(body) > max_len:
+        body = body[:max_len].rsplit(" ", 1)[0] + "…"
     return f"🐷 **«{query}»**\n\n{body}"
+
+
+KNOWLEDGE_SYNTHESIS_SYSTEM = """
+Ты — Свин, свой в чате друзей. Ниже — Википедия (если есть), сниппеты поиска и текст с двух других сайтов.
+
+Задача: развёрнутый, но компактный ответ по-русски — как объяснил бы друг в чате, без занудства.
+
+Правила:
+- Сначала прямой ответ: **что это** / **как сделать** (если вопрос «как» — 3–4 шага коротко, в тексте, не простыня)
+- 6–9 предложений; можно один короткий абзац + один с фактами
+- Опирайся на блок [Википедия] в первую очередь, остальное — уточнения
+- БЕЗ ссылок и URL; без «по данным сайта», «в материалах», «выжимках»
+- Народные прозвища (пирожок, горбатая и т.д.) — сразу расшифруй, что за техника/предмет
+- Не уходи в общие определения («машина — это устройство…»), если спросили про конкретное имя
+- Можно **жирным** 2–3 ключевых слова. Без «Я ИИ» и отказов
+""".strip()
 
 
 SEARCH_SYNTHESIS_SYSTEM = """
@@ -283,12 +362,23 @@ _META_REFUSAL_RE = re.compile(
     r"|нет\s+(?:в\s+)?(?:информации|данных)"
     r"|не\s+наш[её]л\s+(?:ничего|информации|упоминан)"
     r"|отсутствует\s+информация"
+    r"|в\s+общем\s+смысл"
+    r"|мало\s+пишут"
     r")"
 )
 
 
 def is_meta_refusal_answer(text: str) -> bool:
     return bool(_META_REFUSAL_RE.search(text))
+
+
+def build_wiki_fallback(query: str, wiki_extra: dict[str, str]) -> str | None:
+    extract = str(wiki_extra.get("extract") or "").strip()
+    title = str(wiki_extra.get("title") or query).strip()
+    if not extract:
+        return None
+    body = extract if len(extract) <= 1500 else extract[:1500].rsplit(" ", 1)[0] + "…"
+    return f"🐷 **«{query}»**\n\n**{title}** — {body}"
 
 
 def build_snippet_fallback(query: str, results: list[dict[str, Any]]) -> str:
@@ -314,6 +404,144 @@ def build_snippet_fallback(query: str, results: list[dict[str, Any]]) -> str:
     return f"🐷 **«{query}»**\n\n{merged}"
 
 
+def _pick_wikipedia_url(results: list[dict[str, Any]]) -> str | None:
+    for row in results:
+        href = str(row.get("href") or row.get("link") or "").strip()
+        if "wikipedia.org/wiki/" in href.lower():
+            return href
+    return None
+
+
+def _pick_other_urls(results: list[dict[str, Any]], *, limit: int = 2) -> list[str]:
+    urls: list[str] = []
+    for row in results:
+        href = str(row.get("href") or row.get("link") or "").strip()
+        if not href.startswith("http"):
+            continue
+        low = href.lower()
+        if "wikipedia.org" in low or "instagram.com" in low:
+            continue
+        urls.append(href)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+async def wikipedia_opensearch(query: str) -> str | None:
+    q = ddg_search_query(query)
+    params = {
+        "action": "opensearch",
+        "search": q,
+        "limit": 1,
+        "namespace": 0,
+        "format": "json",
+    }
+    for lang in ("ru", "en"):
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=12)
+            ) as session:
+                async with session.get(
+                    f"https://{lang}.wikipedia.org/w/api.php", params=params
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+            if isinstance(data, list) and len(data) >= 4 and data[3]:
+                return str(data[3][0])
+        except Exception as exc:
+            logger.warning("wiki opensearch %s: %s", lang, exc)
+    return None
+
+
+async def wikipedia_summary_bundle(wiki_url: str) -> dict[str, str]:
+    m = _WIKI_PAGE_RE.search(wiki_url)
+    if not m:
+        return {}
+    lang = m.group("lang").lower()
+    title_slug = m.group("title")
+    api_url = (
+        f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
+        f"{quote(unquote(title_slug), safe='/')}"
+    )
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=12)
+        ) as session:
+            async with session.get(api_url) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json(content_type=None)
+    except Exception as exc:
+        logger.warning("wiki summary %s: %s", wiki_url[:80], exc)
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    thumb = data.get("thumbnail") or {}
+    photo = ""
+    if isinstance(thumb, dict):
+        photo = str(thumb.get("source") or "").strip()
+
+    extract = str(data.get("extract") or data.get("description") or "").strip()
+    return {
+        "title": str(data.get("title") or "").strip(),
+        "extract": extract,
+        "thumbnail": photo,
+        "lang": lang,
+        "url": wiki_url,
+    }
+
+
+async def fetch_pages_from_urls(
+    urls: list[str],
+) -> list[tuple[str, dict[str, str]]]:
+    if not urls:
+        return []
+
+    async def _one(url: str) -> tuple[str, dict[str, str]]:
+        try:
+            data = await asyncio.wait_for(fetch_page_preview(url), timeout=14)
+            return url, data
+        except Exception as exc:
+            logger.warning("page fetch %s: %s", url[:80], exc)
+            return url, {"error": str(exc)}
+
+    return list(await asyncio.gather(*[_one(u) for u in urls]))
+
+
+async def fetch_knowledge_pages(
+    query: str,
+    results: list[dict[str, Any]],
+) -> tuple[list[tuple[str, dict[str, str]]], str | None, dict[str, str]]:
+    """Википедия + 2 других сайта; картинка и текст статьи с Вики."""
+    wiki_url = _pick_wikipedia_url(results)
+    if not wiki_url:
+        wiki_url = await wikipedia_opensearch(query)
+
+    wiki_extra: dict[str, str] = {}
+    photo_url: str | None = None
+    if wiki_url:
+        wiki_extra = await wikipedia_summary_bundle(wiki_url)
+        photo_url = wiki_extra.get("thumbnail") or None
+
+    urls: list[str] = []
+    if wiki_url:
+        urls.append(wiki_url)
+    urls.extend(_pick_other_urls(results, limit=2))
+
+    if not urls:
+        urls = [
+            str(row.get("href") or row.get("link") or "").strip()
+            for row in results[:3]
+            if str(row.get("href") or "").startswith("http")
+        ]
+
+    pages = await fetch_pages_from_urls(urls[:3])
+    return pages, photo_url, wiki_extra
+
+
 async def fetch_top_pages(
     results: list[dict[str, Any]], *, limit: int = 3
 ) -> list[tuple[str, dict[str, str]]]:
@@ -324,18 +552,7 @@ async def fetch_top_pages(
             urls.append(href)
         if len(urls) >= limit:
             break
-
-    async def _one(url: str) -> tuple[str, dict[str, str]]:
-        try:
-            data = await asyncio.wait_for(fetch_page_preview(url), timeout=14)
-            return url, data
-        except Exception as exc:
-            logger.warning("page fetch %s: %s", url[:80], exc)
-            return url, {"error": str(exc)}
-
-    if not urls:
-        return []
-    return list(await asyncio.gather(*[_one(u) for u in urls]))
+    return await fetch_pages_from_urls(urls)
 
 
 def extract_http_url(text: str) -> str | None:

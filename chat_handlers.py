@@ -373,7 +373,12 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
 
         web_reply = await try_web_search_reply(message)
         if web_reply:
-            await reply_formatted(message, web_reply)
+            if web_reply.photo_url:
+                try:
+                    await message.reply_photo(web_reply.photo_url)
+                except Exception as exc:
+                    logger.warning("wiki photo send failed: %s", exc)
+            await reply_formatted(message, web_reply.text)
             return
         # только ссылка без «Свин» — ниже уйдёт в GPT; IG ловится отдельным хендлером
 

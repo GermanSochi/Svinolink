@@ -1,18 +1,19 @@
-"""Обработка «Свин, найди в интернете …» в групповом чате."""
+"""Поиск в интернете и «энциклопедия» в групповом чате."""
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from aiogram.types import Message
 
 import ai_quota
 from web_search import (
     extract_http_url,
-    extract_search_query,
+    fetch_knowledge_pages,
     fetch_page_preview,
-    fetch_top_pages,
     format_page_markdown,
     format_search_markdown,
+    resolve_search_query,
     search_web,
     wants_search_links,
     wants_url_read,
@@ -20,6 +21,12 @@ from web_search import (
 from web_search_synthesis import synthesize_search_answer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WebSearchReply:
+    text: str
+    photo_url: str | None = None
 
 
 async def try_url_read_reply(message: Message) -> str | None:
@@ -34,14 +41,14 @@ async def try_url_read_reply(message: Message) -> str | None:
     return format_page_markdown(url, data)
 
 
-async def try_web_search_reply(message: Message) -> str | None:
+async def try_web_search_reply(message: Message) -> WebSearchReply | None:
     text = (message.text or message.caption or "").strip()
 
     url_reply = await try_url_read_reply(message)
     if url_reply:
-        return url_reply
+        return WebSearchReply(text=url_reply)
 
-    query = extract_search_query(text)
+    query, knowledge_mode = resolve_search_query(text)
     if not query:
         return None
 
@@ -49,28 +56,37 @@ async def try_web_search_reply(message: Message) -> str | None:
     show_links = wants_search_links(text)
 
     logger.info(
-        "web_search chat=%s query=%r links=%s",
+        "web_search chat=%s query=%r knowledge=%s links=%s",
         message.chat.id,
         query[:120],
+        knowledge_mode,
         show_links,
     )
 
-    results = await search_web(query, max_results=6)
+    results = await search_web(query, max_results=8)
     if not results:
-        return format_search_markdown(query, [])
+        return WebSearchReply(text=format_search_markdown(query, []))
 
     if show_links:
-        return format_search_markdown(query, results, max_show=3)
+        return WebSearchReply(text=format_search_markdown(query, results, max_show=3))
 
     if uid and not ai_quota.can_ask(uid):
-        return (
-            "🐷 Лимит вопросов «Свин» на час выбран.\n\n"
-            "💬 Попробуй позже или напиши **«со ссылками»** — "
-            "дам короткий список без ИИ."
+        return WebSearchReply(
+            text=(
+                "🐷 Лимит вопросов «Свин» на час выбран.\n\n"
+                "💬 Попробуй позже или напиши **«со ссылками»** — "
+                "дам короткий список без ИИ."
+            )
         )
 
-    pages = await fetch_top_pages(results, limit=3)
-    answer = await synthesize_search_answer(query, results, pages)
+    pages, photo_url, wiki_extra = await fetch_knowledge_pages(query, results)
+    answer = await synthesize_search_answer(
+        query,
+        results,
+        pages,
+        wiki_extra=wiki_extra or None,
+        detailed=knowledge_mode,
+    )
     if uid:
         ai_quota.record(uid)
-    return answer
+    return WebSearchReply(text=answer, photo_url=photo_url)
