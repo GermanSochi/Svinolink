@@ -58,6 +58,23 @@ _WHEN_SAID_RE = re.compile(
 
 _TIME_ONLY_RE = re.compile(r"(?i)(?:во\s+сколько|в\s+какое\s+время)")
 
+# Все участники: «кто что писал вчера» / «что писали вчера в чате»
+_ALL_USERS_LOG_RE = re.compile(
+    r"(?i)(?:"
+    r"кто\s+что\s+(?:писал[аи]?|говорил[аи]?|написал[aи]?)"
+    r"|"
+    r"что\s+(?:все\s+)?(?:писал[аи]?|говорил[аи]?|написал[aи]?)"
+    r"(?:\s+в\s+(?:этом\s+)?чате)?"
+    r")"
+    r"\s+(?:вчера|сегодня|позавчера)"
+)
+
+# Один человек без имени в конце — только если строка обрывается на дате
+_ONE_DAY_ALL_RE = re.compile(
+    r"(?i)^что\s+(?:писал[аи]?|говорил[аи]?|написал[aи]?)"
+    r"(?:\s+в\s+чате)?\s+(?:вчера|сегодня|позавчера)\s*[\?\.!,]*$"
+)
+
 _USER_LOG_STOP = frozenset(
     {
         "вчера",
@@ -163,33 +180,44 @@ def parse_user_log_request(text: str) -> UserLogQuery | None:
     ):
         return None
 
+    # Сначала — запрос по одному нику (… вчера Имя / … Имя вчера)
     m = _USER_LOG_RE.search(blob)
-    if not m:
-        if _TIME_ONLY_RE.search(blob) and hf is not None:
-            return None
+    if m:
+        raw = (m.group("u") or m.group("u2") or m.group("u3") or "").strip().lstrip("@")
+        if raw and raw.lower() not in _USER_LOG_STOP:
+            phrase = None
+            mp = re.search(r"(?i)\bпро\s+(.+?)[\?\.!,]*$", blob)
+            if mp:
+                cand = mp.group(1).strip(" ?!.,")
+                if cand and len(cand) < 120 and not re.search(r"(?i)\b(?:с|до)\s+\d", cand):
+                    phrase = cand
+            return UserLogQuery(
+                username=raw,
+                period=period,
+                hour_from=hf,
+                hour_to=ht,
+                minute_from=mf,
+                minute_to=mt,
+                phrase=phrase or None,
+                when_only=False,
+            )
+
+    # Все участники чата за день
+    if _ALL_USERS_LOG_RE.search(blob) or _ONE_DAY_ALL_RE.search(blob):
+        return UserLogQuery(
+            username=None,
+            period=period,
+            hour_from=hf,
+            hour_to=ht,
+            minute_from=mf,
+            minute_to=mt,
+            phrase=None,
+            when_only=False,
+        )
+
+    if _TIME_ONLY_RE.search(blob) and hf is not None:
         return None
-
-    raw = (m.group("u") or m.group("u2") or m.group("u3") or "").strip().lstrip("@")
-    if not raw or raw.lower() in _USER_LOG_STOP:
-        return None
-
-    phrase = None
-    mp = re.search(r"(?i)\bпро\s+(.+?)[\?\.!,]*$", blob)
-    if mp:
-        cand = mp.group(1).strip(" ?!.,")
-        if cand and len(cand) < 120 and not re.search(r"(?i)\b(?:с|до)\s+\d", cand):
-            phrase = cand
-
-    return UserLogQuery(
-        username=raw,
-        period=period,
-        hour_from=hf,
-        hour_to=ht,
-        minute_from=mf,
-        minute_to=mt,
-        phrase=phrase or None,
-        when_only=False,
-    )
+    return None
 
 
 def is_user_log_request(text: str) -> bool:

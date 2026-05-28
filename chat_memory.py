@@ -519,6 +519,60 @@ async def fetch_messages_by_user(
     ]
 
 
+async def fetch_period_messages(
+    chat_id: int,
+    *,
+    period: str = "yesterday",
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    minute_from: int = 0,
+    minute_to: int = 59,
+    limit: int = 300,
+) -> list[dict[str, Any]]:
+    """Все сообщения чата за период (для сводки по участникам)."""
+    from chat_time import utc_bounds_for_query
+
+    start_utc, end_utc = utc_bounds_for_query(
+        period,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        minute_from=minute_from,
+        minute_to=minute_to,
+    )
+
+    query = """
+        SELECT username, message_text, created_at
+        FROM chat_history
+        WHERE chat_id = $1
+          AND created_at >= $2
+          AND created_at <= $3
+        ORDER BY created_at ASC
+        LIMIT $4
+    """
+
+    if _pool is not None:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(query, chat_id, start_utc, end_utc, limit)
+    else:
+        url = database_url()
+        if not url:
+            return []
+        conn = await _connect_once(url)
+        try:
+            rows = await conn.fetch(query, chat_id, start_utc, end_utc, limit)
+        finally:
+            await conn.close()
+
+    return [
+        {
+            "username": row["username"] or "Аноним",
+            "message_text": row["message_text"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 async def fetch_chat_participants(
     chat_id: int,
     *,
