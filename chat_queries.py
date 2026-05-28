@@ -13,6 +13,23 @@ CHAT_EXAMPLES_RE = re.compile(
     r")"
 )
 
+_TODAY_RE = re.compile(r"(?i)\bсегодня\b")
+_YESTERDAY_RE = re.compile(r"(?i)\bвчера\b")
+_DAY_BEFORE_RE = re.compile(r"(?i)\bпозавчера\b")
+
+_WHO_IN_CHAT_RE = re.compile(
+    r"(?i)(?:"
+    r"кто\s+(?:в\s+)?(?:этом\s+)?чате"
+    r"|кто\s+здесь"
+    r"|участник(?:ы|ов)?\s+чата"
+    r"|кто\s+есть"
+    r")"
+)
+
+_WHO_IS_RE = re.compile(
+    r"(?i)кто\s+так(?:ой|ая|ие)\s+(.+?)(?:[\?\.!,]|$)"
+)
+
 
 def is_chat_examples_request(text: str) -> bool:
     blob = text.strip()
@@ -32,10 +49,65 @@ def is_chat_examples_request(text: str) -> bool:
     return False
 
 
+def detect_history_period(text: str) -> str:
+    """today | yesterday | day_before | 24h"""
+    blob = text.strip()
+    if _DAY_BEFORE_RE.search(blob):
+        return "day_before"
+    if _YESTERDAY_RE.search(blob):
+        return "yesterday"
+    if _TODAY_RE.search(blob):
+        return "today"
+    return "24h"
+
+
+def is_recap_like_question(text: str) -> bool:
+    lower = text.lower()
+    if any(w in lower for w in ("позавчера", "вчера", "сегодня")):
+        if any(
+            w in lower
+            for w in (
+                "что было",
+                "что происходило",
+                "о чем",
+                "о чём",
+                "говорил",
+                "говорили",
+                "обсуждал",
+                "пересказ",
+                "итог",
+            )
+        ):
+            return True
+    return False
+
+
+def is_who_in_chat_question(text: str) -> bool:
+    return bool(_WHO_IN_CHAT_RE.search(text.strip()))
+
+
+def extract_who_is_name(text: str) -> str | None:
+    blob = text.strip()
+    m = _WHO_IS_RE.search(blob)
+    if not m:
+        return None
+    name = m.group(1).strip(" ?!.,")
+    if len(name) < 2:
+        return None
+    return name
+
+
 def needs_recent_history(text: str) -> bool:
-    """Нужна ли короткая выборка истории для ответа (не полный дайджест)."""
+    """Нужна ли выборка истории для ответа (не полный дайджест)."""
     if is_chat_examples_request(text):
         return False
+    if is_recap_like_question(text):
+        return True
+    if is_who_in_chat_question(text):
+        return True
+    if extract_who_is_name(text):
+        return True
+
     lower = text.lower()
     if any(
         w in lower
@@ -45,13 +117,18 @@ def needs_recent_history(text: str) -> bool:
             "как зовут",
             "имя",
             "кто сказал",
+            "кто такой",
+            "кто такая",
             "что писал",
             "сколько",
             "когда",
             "вчера",
             "сегодня",
+            "позавчера",
             "помнишь",
             "говорил",
+            "участник",
+            "в чате",
         )
     ):
         return True

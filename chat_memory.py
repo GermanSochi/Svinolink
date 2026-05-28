@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
@@ -358,18 +359,29 @@ async def log_message(
         await conn.close()
 
 
+def _tz() -> str:
+    tz = settings.chat_timezone.strip() or "Europe/Moscow"
+    # asyncpg/SQL: только буквы, цифры, подчёркивание и слэш
+    if not re.fullmatch(r"[A-Za-z0-9_/+-]+", tz):
+        return "Europe/Moscow"
+    return tz
+
+
 async def fetch_recent(
     chat_id: int,
     *,
     period: str = "24h",
 ) -> list[dict[str, Any]]:
+    tz = _tz()
+    local_day = f"(created_at AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date"
+    today_local = f"(NOW() AT TIME ZONE '{tz}')::date"
+
     if period == "today":
-        where = "created_at >= CURRENT_DATE"
+        where = f"{local_day} = {today_local}"
     elif period == "yesterday":
-        where = (
-            "created_at >= CURRENT_DATE - INTERVAL '1 day' "
-            "AND created_at < CURRENT_DATE"
-        )
+        where = f"{local_day} = {today_local} - 1"
+    elif period == "day_before":
+        where = f"{local_day} = {today_local} - 2"
     else:
         where = "created_at >= NOW() - INTERVAL '24 hours'"
 
@@ -406,6 +418,86 @@ async def fetch_recent(
 
 async def fetch_last_24h(chat_id: int) -> list[dict[str, Any]]:
     return await fetch_recent(chat_id, period="24h")
+
+
+async def fetch_chat_participants(
+    chat_id: int,
+    *,
+    days: int = 3,
+) -> list[dict[str, Any]]:
+    """Уникальные ники из chat_history (храним ~3 дня)."""
+    query = """
+        SELECT user_id, username, COUNT(*) AS msg_count,
+               MAX(created_at) AS last_seen
+        FROM chat_history
+        WHERE chat_id = $1
+          AND created_at >= NOW() - make_interval(days => $2)
+        GROUP BY user_id, username
+        ORDER BY msg_count DESC, username ASC
+    """
+    if _pool is not None:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(query, chat_id, days)
+    else:
+        url = database_url()
+        if not url:
+            return []
+        conn = await _connect_once(url)
+        try:
+            rows = await conn.fetch(query, chat_id, days)
+        finally:
+            await conn.close()
+
+    return [
+        {
+            "user_id": int(row["user_id"]),
+            "username": row["username"] or f"user_{row['user_id']}",
+            "msg_count": int(row["msg_count"]),
+            "last_seen": row["last_seen"],
+        }
+        for row in rows
+    ]
+
+
+async def search_history_mentions(
+    chat_id: int,
+    needle: str,
+    *,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Цитаты из чата, где встречается имя/слово."""
+    q = needle.strip()
+    if len(q) < 2:
+        return []
+    query = """
+        SELECT username, message_text, created_at
+        FROM chat_history
+        WHERE chat_id = $1
+          AND message_text ILIKE '%' || $2 || '%'
+        ORDER BY created_at DESC
+        LIMIT $3
+    """
+    if _pool is not None:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(query, chat_id, q, limit)
+    else:
+        url = database_url()
+        if not url:
+            return []
+        conn = await _connect_once(url)
+        try:
+            rows = await conn.fetch(query, chat_id, q, limit)
+        finally:
+            await conn.close()
+
+    return [
+        {
+            "username": row["username"] or "Аноним",
+            "message_text": row["message_text"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
 
 
 async def fetch_audit_rows(limit: int = 10) -> list[dict[str, Any]]:

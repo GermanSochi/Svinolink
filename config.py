@@ -44,6 +44,8 @@ class Settings(BaseSettings):
         alias="INSTAGRAM_COOKIES_FILE",
     )
     supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
+    # Границы «сегодня/вчера/позавчера» для chat_history (Supabase в UTC).
+    chat_timezone: str = Field(default="Europe/Moscow", alias="CHAT_TIMEZONE")
 
     @field_validator("supabase_database_url", mode="before")
     @classmethod

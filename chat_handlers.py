@@ -20,7 +20,8 @@ from capabilities import capabilities_markdown, is_capabilities_question
 # Мемы/видосы отключены — оставляем импорты закомментированными на будущее.
 from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, parse_trigger_manage
 from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview, extract_plain_text
-from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory
+from chat_queries import is_who_in_chat_question
+from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory, who_in_chat_reply
 from message_urls import message_has_instagram_link, url_from_message
 from trigger_queries import is_trigger_list_question
 from yandex_router import route_intent
@@ -372,6 +373,12 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         if is_capabilities_question(text):
             await reply_formatted(message, capabilities_markdown())
             return
+
+        if is_who_in_chat_question(text):
+            reply = await who_in_chat_reply(message.chat.id)
+            if reply:
+                await reply_formatted(message, reply)
+                return
 
         # Мемы/видосы отключены по просьбе (пока без генерации картинок).
 
