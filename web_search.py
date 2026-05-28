@@ -141,7 +141,23 @@ async def _instant_answer_fallback(query: str) -> list[dict[str, Any]]:
     return out
 
 
-async def search_web(query: str, *, max_results: int = 5) -> list[dict[str, Any]]:
+_LINKS_HINT = re.compile(
+    r"(?i)(?:"
+    r"со\s+ссылками"
+    r"|дай\s+ссылки"
+    r"|покажи\s+ссылки"
+    r"|с\s+источниками"
+    r"|источники"
+    r"|ссылки\s+на"
+    r")"
+)
+
+
+def wants_search_links(text: str) -> bool:
+    return bool(_LINKS_HINT.search(text))
+
+
+async def search_web(query: str, *, max_results: int = 6) -> list[dict[str, Any]]:
     q = _clean_query(query)
     if not q:
         return []
@@ -159,7 +175,12 @@ async def search_web(query: str, *, max_results: int = 5) -> list[dict[str, Any]
     return await _instant_answer_fallback(q)
 
 
-def format_search_markdown(query: str, results: list[dict[str, Any]]) -> str:
+def format_search_markdown(
+    query: str,
+    results: list[dict[str, Any]],
+    *,
+    max_show: int = 3,
+) -> str:
     if not results:
         return (
             f"🐷 По запросу **«{query}»** в сети ничего не нашёл.\n\n"
@@ -167,27 +188,98 @@ def format_search_markdown(query: str, results: list[dict[str, Any]]) -> str:
             "**«Свин, найди в интернете …»**"
         )
 
-    lines = [
-        f"🐷 **Поиск в сети** — **«{query}»**\n",
-        f"🔎 Нашёл **{len(results)}** ссылок:\n",
-    ]
-    for i, row in enumerate(results[:5], 1):
+    lines = [f"🐷 **«{query}»** — источники:\n"]
+    for row in results[:max_show]:
         title = str(row.get("title") or "Без названия").strip()
         href = str(row.get("href") or row.get("link") or "").strip()
         body = str(row.get("body") or row.get("snippet") or "").strip()
-        if len(body) > 220:
-            body = body[:220] + "…"
+        if len(body) > 140:
+            body = body[:140] + "…"
         block = f"\n🔹 **{title}**"
         if body:
             block += f"\n{body}"
         if href:
             block += f"\n🔗 {href}"
         lines.append(block)
-
-    lines.append(
-        "\n\n✅ Источник: **DuckDuckGo**. Для уточнения — спроси ещё раз конкретнее."
-    )
     return "\n".join(lines)
+
+
+def build_search_evidence(
+    query: str,
+    results: list[dict[str, Any]],
+    pages: list[tuple[str, dict[str, str]]],
+) -> str:
+    parts = [f"Запрос: {query}\n"]
+    for i, row in enumerate(results, 1):
+        title = str(row.get("title") or "").strip()
+        body = str(row.get("body") or row.get("snippet") or "").strip()
+        parts.append(f"\n[{i}] {title}\n{body[:500]}")
+    for url, data in pages:
+        if data.get("error"):
+            continue
+        chunk = "\n".join(
+            x
+            for x in (
+                data.get("title"),
+                data.get("h1"),
+                data.get("description"),
+                (data.get("body") or "")[:900],
+            )
+            if x
+        )
+        parts.append(f"\n[страница {url}]\n{chunk}")
+    return "\n".join(parts)
+
+
+def _strip_urls(text: str) -> str:
+    return re.sub(r"https?://\S+", "", text).strip()
+
+
+def wrap_short_answer(query: str, answer: str) -> str:
+    body = _strip_urls(answer.strip())
+    if len(body) > 1100:
+        body = body[:1100].rsplit(" ", 1)[0] + "…"
+    return f"🐷 **«{query}»**\n\n{body}"
+
+
+SEARCH_SYNTHESIS_SYSTEM = """
+Ты — Свин, свой в чате друзей. Тебе дали выжимки из поиска в интернете.
+
+Задача: один короткий ответ по-русски, как устное объяснение в чате.
+
+Правила:
+- 3–5 предложений, без воды и без списков из пяти пунктов
+- БЕЗ ссылок, URL, «источник:», «по данным сайта…»
+- Сведи факты из разных выжимок в одну версию; противоречия — осторожно («ходят версии…»)
+- Не выдумывай то, чего нет в выжимках
+- Если это народное прозвище/мем — объясни суть простыми словами
+- Можно **жирным** выделить 1–2 ключевых слова
+- Без «Я ИИ», без отказов
+""".strip()
+
+
+async def fetch_top_pages(
+    results: list[dict[str, Any]], *, limit: int = 3
+) -> list[tuple[str, dict[str, str]]]:
+    urls: list[str] = []
+    for row in results:
+        href = str(row.get("href") or row.get("link") or "").strip()
+        if href.startswith("http") and "instagram.com" not in href.lower():
+            urls.append(href)
+        if len(urls) >= limit:
+            break
+
+    async def _one(url: str) -> tuple[str, dict[str, str]]:
+        try:
+            data = await asyncio.wait_for(fetch_page_preview(url), timeout=14)
+            return url, data
+        except Exception as exc:
+            logger.warning("page fetch %s: %s", url[:80], exc)
+            return url, {"error": str(exc)}
+
+    if not urls:
+        return []
+    return list(await asyncio.gather(*[_one(u) for u in urls]))
 
 
 def extract_http_url(text: str) -> str | None:
