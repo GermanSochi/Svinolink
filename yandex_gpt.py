@@ -7,6 +7,7 @@ import re
 
 import aiohttp
 
+from bot_messages import gpt_glitch_message
 from svin_system_prompt import SVIN_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -22,15 +23,6 @@ _REFUSAL_RE = re.compile(
     r"|этой\s+теме"
     r")"
 )
-
-_REFUSAL_FALLBACK = (
-    "🐷 YandexGPT заглючил и отказался отвечать — это не я.\n\n"
-    "💬 Попробуй:\n\n"
-    "🔹 **«примеры из чата»**\n\n"
-    "🔹 **«кто в чате»**\n\n"
-    "🔹 **«кто что писал вчера»** или **«что писал вчера Имя»**"
-)
-
 
 class YandexGPTError(RuntimeError):
     pass
@@ -77,7 +69,7 @@ class YandexGPT:
             answer = await self._complete(user_payload, retry_system)
 
         logger.error("YandexGPT kept refusing after retries")
-        return _REFUSAL_FALLBACK
+        return gpt_glitch_message()
 
     async def _complete(self, user_text: str, system_text: str) -> str:
         api_key = os.getenv("YANDEX_API_KEY", "").strip()

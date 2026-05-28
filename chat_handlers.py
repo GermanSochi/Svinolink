@@ -23,6 +23,12 @@ from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, pa
 from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview, extract_plain_text
 from chat_queries import is_who_in_chat_question
 from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory, who_in_chat_reply
+from bot_messages import (
+    instagram_timeout_message,
+    map_instagram_error,
+    video_too_heavy_message,
+    yandex_error_message,
+)
 from personality_commands import try_personality_or_roster
 from web_search_handlers import try_web_search_reply
 from message_urls import message_has_instagram_link, url_from_message
@@ -113,6 +119,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
     await message.answer("Сек...")
 
     file_path = None
+    clean_url: str | None = None
     try:
         text = message.text or message.caption or ""
         print(f"ПОЛУЧЕНО СООБЩЕНИЕ ИЗ ГРУППЫ: {text}")
@@ -150,10 +157,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         if size > TELEGRAM_MAX_BYTES:
             remove_file(file_path)
             file_path = None
-            await message.answer(
-                "❌ Ошибка: Видео весит более 50 МБ. "
-                "Telegram запрещает ботам отправлять такие тяжелые файлы."
-            )
+            await message.answer(video_too_heavy_message(clean_url))
             return
 
         max_retries = 2
@@ -179,15 +183,10 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 raise
     except asyncio.TimeoutError:
         logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
-        await message.answer(
-            "❌ Instagram слишком долго не отвечает. Отправь ссылку ещё раз."
-        )
+        await message.answer(instagram_timeout_message())
     except Exception as e:
         logger.error("instagram handler error: %s", e, exc_info=True)
-        err_text = str(e)
-        if not err_text.startswith("❌"):
-            err_text = f"❌ Ошибка в коде бота: {err_text}"
-        await message.answer(err_text)
+        await message.answer(map_instagram_error(e, clean_url))
     finally:
         if file_path is not None:
             try:
@@ -422,4 +421,4 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
         await reply_formatted(message, answer)
     except Exception as e:
         logger.error("svin_ai error: %s", e, exc_info=True)
-        await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(e)}")
+        await reply_formatted(message, yandex_error_message())

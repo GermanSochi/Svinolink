@@ -30,10 +30,6 @@ COOKIES_EXPIRED_MSG = (
     "❌ Сессия Instagram истекла или сброшена. "
     "Обновите data/cookies.txt (Netscape) и перезапустите бот на Render."
 )
-TOO_LARGE_MSG = (
-    "❌ Ошибка: Видео весит более 50 МБ. "
-    "Telegram запрещает ботам отправлять такие тяжелые файлы."
-)
 
 _client = None
 _client_lock = Lock()
@@ -248,11 +244,13 @@ def _runtime_error_for(exc: Exception) -> RuntimeError:
     return RuntimeError(f"❌ Ошибка instagrapi: {exc}")
 
 
-def check_file_size(path: Path) -> None:
+def check_file_size(path: Path, *, source_url: str = "") -> None:
+    from bot_messages import video_too_heavy_message
+
     size = os.path.getsize(path)
     if size > TELEGRAM_MAX_BYTES:
         path.unlink(missing_ok=True)
-        raise ValueError(TOO_LARGE_MSG)
+        raise ValueError(video_too_heavy_message(source_url or None))
 
 
 def _download_instagram_video_once(clean: str) -> Path:
@@ -273,7 +271,7 @@ def _download_instagram_video_once(clean: str) -> Path:
 
     dest = _dest_path()
     shutil.copy2(raw_path, dest)
-    check_file_size(dest)
+    check_file_size(dest, source_url=clean)
     logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
     return dest
 

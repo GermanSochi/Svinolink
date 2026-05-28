@@ -28,9 +28,10 @@ async def synthesize_search_answer(
         answer = await gpt.reply(prompt, system=SEARCH_SYNTHESIS_SYSTEM)
     except Exception as exc:
         logger.error("search synthesis failed: %s", exc)
+        from bot_messages import gpt_glitch_message
+
         return (
-            f"🐷 **«{query}»**\n\n"
-            "🔎 Нашёл в сети, но свести в ответ не вышло — "
-            "спроси ещё раз или напиши **«со ссылками»**."
+            f"🔎 По **«{query}»** нашёл в сети, но свести не вышло.\n\n"
+            f"{gpt_glitch_message()}"
         )
     return wrap_short_answer(query, answer)

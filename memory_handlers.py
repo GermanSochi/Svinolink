@@ -25,6 +25,7 @@ from deps import gpt, store
 from chat_personality import tone_appendix_for_chat
 from chat_roster import MEMBERS, format_member_bullet
 from svin_system_prompt import SVIN_SYSTEM_PROMPT
+from bot_messages import yandex_error_message
 from telegram_format import reply_formatted
 
 logger = logging.getLogger(__name__)
@@ -334,4 +335,4 @@ async def handle_chat_recap(message: Message, bot: Bot) -> None:
         await reply_formatted(message, answer)
     except Exception as exc:
         logger.error("chat recap error: %s", exc, exc_info=True)
-        await message.answer(f"❌ Ошибка ИИ (Яндекс): {str(exc)}")
+        await reply_formatted(message, yandex_error_message())
