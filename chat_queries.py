@@ -30,6 +30,37 @@ _WHO_IS_RE = re.compile(
     r"(?i)кто\s+так(?:ой|ая|ие)\s+(.+?)(?:[\?\.!,]|$)"
 )
 
+_USER_LOG_RE = re.compile(
+    r"(?i)(?:"
+    r"что\s+(?:писал[аи]?|написал[аи]?|говорил[аи]?|сказал[аи]?)"
+    r"(?:\s+в\s+(?:этом\s+)?чате)?"
+    r"(?:\s+(?:вчера|сегодня|позавчера))?"
+    r"\s+(?P<u>[@\w][\w.-]{1,31})"
+    r"|"
+    r"что\s+(?:писал[аи]?|написал[аи]?)"
+    r"\s+(?:вчера|сегодня|позавчера)\s+(?P<u2>[@\w][\w.-]{1,31})"
+    r"|"
+    r"(?P<u3>[@\w][\w.-]{1,31})\s+"
+    r"(?:писал[аи]?|написал[аи]?|говорил[аи]?)"
+    r"(?:\s+(?:вчера|сегодня|позавчера))?"
+    r")"
+)
+
+_USER_LOG_STOP = frozenset(
+    {
+        "вчера",
+        "сегодня",
+        "позавчера",
+        "чате",
+        "чат",
+        "этом",
+        "свин",
+        "свинья",
+        "что",
+        "как",
+    }
+)
+
 
 def is_chat_examples_request(text: str) -> bool:
     blob = text.strip()
@@ -86,6 +117,33 @@ def is_who_in_chat_question(text: str) -> bool:
     return bool(_WHO_IN_CHAT_RE.search(text.strip()))
 
 
+def parse_user_log_request(text: str) -> tuple[str, str] | None:
+    """
+    «что писал вчера Tom_Frod» → (username, period).
+    Ответ из Supabase без Yandex GPT.
+    """
+    blob = re.sub(r"(?i)^(?:свин|свинья)[\s,!?.\-]+", "", text.strip()).strip()
+    if not blob:
+        return None
+    lower = blob.lower()
+    if not any(w in lower for w in ("писал", "написал", "говорил", "сказал", "сообщен")):
+        return None
+
+    m = _USER_LOG_RE.search(blob)
+    if not m:
+        return None
+
+    raw = (m.group("u") or m.group("u2") or m.group("u3") or "").strip().lstrip("@")
+    if not raw or raw.lower() in _USER_LOG_STOP:
+        return None
+
+    return raw, detect_history_period(blob)
+
+
+def is_user_log_request(text: str) -> bool:
+    return parse_user_log_request(text) is not None
+
+
 def extract_who_is_name(text: str) -> str | None:
     blob = text.strip()
     m = _WHO_IS_RE.search(blob)
@@ -100,6 +158,8 @@ def extract_who_is_name(text: str) -> str | None:
 def needs_recent_history(text: str) -> bool:
     """Нужна ли выборка истории для ответа (не полный дайджест)."""
     if is_chat_examples_request(text):
+        return False
+    if is_user_log_request(text):
         return False
     if is_recap_like_question(text):
         return True

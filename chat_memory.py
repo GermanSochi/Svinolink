@@ -420,6 +420,64 @@ async def fetch_last_24h(chat_id: int) -> list[dict[str, Any]]:
     return await fetch_recent(chat_id, period="24h")
 
 
+async def fetch_messages_by_user(
+    chat_id: int,
+    username: str,
+    *,
+    period: str = "yesterday",
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    """Сообщения одного ника за день (today/yesterday/day_before/24h)."""
+    needle = username.strip().lstrip("@")
+    if len(needle) < 2:
+        return []
+
+    tz = _tz()
+    local_day = f"(created_at AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date"
+    today_local = f"(NOW() AT TIME ZONE '{tz}')::date"
+
+    if period == "today":
+        where = f"{local_day} = {today_local}"
+    elif period == "yesterday":
+        where = f"{local_day} = {today_local} - 1"
+    elif period == "day_before":
+        where = f"{local_day} = {today_local} - 2"
+    else:
+        where = "created_at >= NOW() - INTERVAL '24 hours'"
+
+    query = f"""
+        SELECT username, message_text, created_at
+        FROM chat_history
+        WHERE chat_id = $1
+          AND {where}
+          AND username ILIKE '%' || $2 || '%'
+        ORDER BY created_at ASC
+        LIMIT $3
+    """
+
+    if _pool is not None:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(query, chat_id, needle, limit)
+    else:
+        url = database_url()
+        if not url:
+            return []
+        conn = await _connect_once(url)
+        try:
+            rows = await conn.fetch(query, chat_id, needle, limit)
+        finally:
+            await conn.close()
+
+    return [
+        {
+            "username": row["username"] or "Аноним",
+            "message_text": row["message_text"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 async def fetch_chat_participants(
     chat_id: int,
     *,

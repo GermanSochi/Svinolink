@@ -14,6 +14,7 @@ import ai_quota
 from config import settings
 from deps import gpt, store
 from chat_examples import chat_examples_markdown
+from chat_user_log import user_messages_markdown
 from telegram_format import reply_formatted
 from chat_queries import is_chat_examples_request
 from capabilities import capabilities_markdown, is_capabilities_question
@@ -379,6 +380,11 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             if reply:
                 await reply_formatted(message, reply)
                 return
+
+        user_log = await user_messages_markdown(message.chat.id, text)
+        if user_log:
+            await reply_formatted(message, user_log)
+            return
 
         # Мемы/видосы отключены по просьбе (пока без генерации картинок).
 
