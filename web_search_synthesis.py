@@ -23,8 +23,10 @@ async def synthesize_search_answer(
     *,
     wiki_extra: dict[str, str] | None = None,
     detailed: bool = False,
+    chat_id: int | None = None,
 ) -> str:
     from deps import gpt
+    from chat_personality import tone_appendix_for_chat
 
     evidence = build_search_evidence(query, results, pages, wiki_extra=wiki_extra)
     if detailed:
@@ -38,6 +40,9 @@ async def synthesize_search_answer(
         system = SEARCH_SYNTHESIS_SYSTEM
         user_tail = "Дай один короткий ответ на запрос. Только текст ответа, без ссылок."
         max_len = 1100
+
+    if chat_id is not None:
+        system = system + tone_appendix_for_chat(chat_id)
 
     prompt = f"{evidence}\n\n{user_tail}"
     try:

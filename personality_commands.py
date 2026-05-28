@@ -55,16 +55,20 @@ async def try_personality_or_roster(message: Message) -> str | None:
         val = int(cmd.split(":", 1)[1])
         p = set_personality(message.chat.id, toxicity=val)
         return (
-            f"🐷 **Токсичность (подкол): {p.toxicity}%**\n\n"
-            f"😏 Юмор остаётся: **{p.humor}%**"
+            f"🐷 **Токсичность (подкол): {p.toxicity}%** — сохранено.\n\n"
+            f"😏 Юмор: **{p.humor}%**\n\n"
+            "💬 Проверка: задай один и тот же вопрос при **10%** и **90%** — "
+            "подача должна отличаться."
         )
 
     if cmd.startswith("set_humor:"):
         val = int(cmd.split(":", 1)[1])
         p = set_personality(message.chat.id, humor=val)
         return (
-            f"🐷 **Юмор: {p.humor}%**\n\n"
-            f"🔥 Подкол остаётся: **{p.toxicity}%**"
+            f"🐷 **Юмор: {p.humor}%** — сохранено.\n\n"
+            f"🔥 Подкол: **{p.toxicity}%**\n\n"
+            "💬 Проверка: задай один и тот же вопрос при **10%** и **90%** — "
+            "подача должна отличаться."
         )
 
     return None

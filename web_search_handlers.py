@@ -86,6 +86,7 @@ async def try_web_search_reply(message: Message) -> WebSearchReply | None:
         pages,
         wiki_extra=wiki_extra or None,
         detailed=knowledge_mode,
+        chat_id=message.chat.id,
     )
     if uid:
         ai_quota.record(uid)
