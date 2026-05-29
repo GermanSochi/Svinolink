@@ -116,6 +116,13 @@ from admin_auth import is_admin_user  # noqa: F401 — re-export для стар
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
+    from config import settings
+    from instagram_download import instagram_user_message
+
+    if not settings.instagram_is_active():
+        await message.answer(instagram_user_message())
+        return
+
     await message.answer("Сек...")
 
     file_path = None

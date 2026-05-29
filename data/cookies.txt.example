@@ -1,0 +1,4 @@
+# Netscape HTTP Cookie File
+# Экспорт cookies Instagram из браузера (расширение «Get cookies.txt» и т.п.)
+# Сохрани как data/cookies.txt — НЕ коммить в git!
+# На Render: положи файл на диск или в секрет, затем INSTAGRAM_PAUSED=0

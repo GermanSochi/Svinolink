@@ -31,6 +31,17 @@ COOKIES_EXPIRED_MSG = (
     "Обновите data/cookies.txt (Netscape) и перезапустите бот на Render."
 )
 
+INSTAGRAM_PAUSED_MSG = (
+    "🐷 **Instagram на паузе** — бот **не заходит** в аккаунт и **не качает** видео.\n\n"
+    "💬 Свин, поиск и память чата работают как обычно."
+)
+
+INSTAGRAM_NO_CREDS_MSG = (
+    "🐷 **Видео из Instagram выключено** — нет cookies на сервере.\n\n"
+    "🔧 Чтобы включить: положи `data/cookies.txt` и сними паузу "
+    "(`INSTAGRAM_PAUSED=0` на Render)."
+)
+
 _client = None
 _client_lock = Lock()
 _ready = False
@@ -160,8 +171,34 @@ def _build_client():
         return _client
 
 
+def scrub_instagram_secrets() -> None:
+    """На паузе удаляем cookies/сессию с диска — чтобы instagrapi не дёргал Instagram."""
+    if not settings.instagram_paused:
+        return
+    for path in (settings.instagram_cookies_file, settings.instagram_session_file):
+        try:
+            if path.is_file():
+                path.unlink()
+                logger.info("Instagram pause: removed %s", path)
+        except OSError as exc:
+            logger.warning("Instagram pause: could not remove %s: %s", path, exc)
+
+
+def instagram_user_message() -> str:
+    if settings.instagram_paused:
+        return INSTAGRAM_PAUSED_MSG
+    return INSTAGRAM_NO_CREDS_MSG
+
+
 def init_instagram_downloader() -> None:
     """Вызов при старте приложения (Render on_startup)."""
+    scrub_instagram_secrets()
+    if settings.instagram_paused:
+        logger.info("Instagram downloader: PAUSED (INSTAGRAM_PAUSED)")
+        return
+    if not settings.instagram_is_active():
+        logger.info("Instagram downloader: no cookies/session — skip init")
+        return
     try:
         _build_client()
     except Exception as exc:
@@ -281,6 +318,11 @@ def download_instagram_video(url: str) -> Path:
     Скачивание Reel через instagrapi (экосистема subzeroid).
     yt-dlp не используется — только instagrapi.
     """
+    if settings.instagram_paused:
+        raise RuntimeError(INSTAGRAM_PAUSED_MSG)
+    if not settings.instagram_is_active():
+        raise RuntimeError(INSTAGRAM_NO_CREDS_MSG)
+
     clean = clean_instagram_url(url)
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/ или /p/")

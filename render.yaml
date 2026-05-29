@@ -24,8 +24,10 @@ services:
         sync: false
       - key: ADMIN_IDS
         sync: false
+      - key: INSTAGRAM_PAUSED
+        value: "1"
       - key: INSTAGRAM_COOKIES_FILE
-        sync: false
+        value: /app/data/cookies.txt
       - key: INSTAGRAM_USERNAME
         sync: false
       - key: INSTAGRAM_PASSWORD

@@ -43,6 +43,20 @@ class Settings(BaseSettings):
         default=BASE_DIR / "data" / "cookies.txt",
         alias="INSTAGRAM_COOKIES_FILE",
     )
+    # true / 1 / yes — бот не трогает Instagram (ни cookies, ни логин)
+    instagram_paused: bool = Field(default=True, alias="INSTAGRAM_PAUSED")
+
+    @field_validator("instagram_paused", mode="before")
+    @classmethod
+    def parse_instagram_paused(cls, v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return True
+        s = str(v).strip().lower()
+        if s in {"", "0", "false", "no", "off", "resume", "run"}:
+            return False
+        return s in {"1", "true", "yes", "on", "pause", "paused"}
     supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
     # Границы «сегодня/вчера/позавчера» для chat_history (Supabase в UTC).
     chat_timezone: str = Field(default="Europe/Moscow", alias="CHAT_TIMEZONE")
@@ -109,6 +123,18 @@ class Settings(BaseSettings):
     @property
     def is_render(self) -> bool:
         return os.getenv("RENDER", "").lower() in {"true", "1", "yes"}
+
+    def instagram_is_active(self) -> bool:
+        """Скачивание IG включено только без паузы и с cookies/сессией/логином."""
+        if self.instagram_paused:
+            return False
+        if self.instagram_cookies_file.is_file():
+            return True
+        if self.instagram_session_file.is_file():
+            return True
+        if self.instagram_username.strip() and self.instagram_password.strip():
+            return True
+        return False
 
     @property
     def admin_usernames(self) -> set[str]:
