@@ -12,3 +12,5 @@ bot.log
 bot.err.log
 *.mp4
 test_db.py
+check_db.py
+test_meme.png
