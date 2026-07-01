@@ -71,9 +71,11 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
-    dp.include_router(skills_router)
+    if settings.skills_tools_enabled:
+        dp.include_router(skills_router)
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
-    dp.include_router(memory_router)
+    if settings.memory_enabled:
+        dp.include_router(memory_router)
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
     dp.message.register(handle_svin_ai, *SVIN_CAPTION_FILTER)
     dp.include_router(trigger_router)

@@ -1,39 +1,55 @@
-# Svinolink — пауза Instagram
+# Svinolink — Instagram включён, всё остальное выключено
 
-**Сейчас:** Instagram **выключен**. Бот **не логинится** и **не использует** твои cookies.
+**Сейчас:** Instagram **включён** (`INSTAGRAM_PAUSED=0`).
 
-Работает: **Свин**, память чата, поиск, игры, файлы.
-
----
-
-## Что сделано
-
-- `data/cookies.txt` удалён из проекта (и из git)
-- По умолчанию `INSTAGRAM_PAUSED=1`
-- При старте на паузе бот **стирает** `cookies.txt` и `instagram_session.json` с диска сервера
+**Выключено:** AI (Yandex GPT), поиск в интернете, игры, память чата (Supabase), команды файлов (/tts, /scrape и т.д.).
 
 ---
 
-## Когда захочешь снова видео из Instagram
+## Что работает
 
-1. Экспортируй свежие cookies из браузера (формат Netscape) → файл **`data/cookies.txt`**
-2. На **Render** → Environment:
-   - `INSTAGRAM_PAUSED` = **`0`** (или `false`)
-   - убери `INSTAGRAM_USERNAME` / `INSTAGRAM_PASSWORD`, если были (логином лучше не пользоваться)
-3. Положи `cookies.txt` на сервер (volume `/app/data/` или деплой — лучше **только на диск Render**, не в GitHub)
-4. **Redeploy** / перезапуск сервиса
+- Скачивание видео по ссылке Instagram (reel/post) → reply с подписью
+- Триггеры (встроенные из `triggers.json`)
+- Управление триггерами из чата (добавить/удалить/править)
+- Админ-панель (`/admin`)
 
-После этого ссылка на reel/post снова должна отдавать видео.
+## Что выключено (флаги в `.env` / `config.py`)
+
+| Фича | Флаг | Значение |
+|-------|------|----------|
+| AI (Yandex GPT) | `AI_ENABLED` | `false` |
+| Поиск в интернете | `WEB_SEARCH_ENABLED` | `false` |
+| Игры | `GAMES_ENABLED` | `false` |
+| Память чата | `MEMORY_ENABLED` | `false` |
+| Команды файлов | `SKILLS_TOOLS_ENABLED` | `false` |
+
+---
+
+## Когда захочешь включить обратно
+
+1. В `.env` добавь нужные флаги:
+   - `AI_ENABLED=1` + `YANDEX_API_KEY=...` — AI-режим
+   - `WEB_SEARCH_ENABLED=1` — поиск в интернете
+   - `GAMES_ENABLED=1` — игры (требует AI)
+   - `MEMORY_ENABLED=1` + `SUPABASE_DATABASE_URL=...` — память чата
+   - `SKILLS_TOOLS_ENABLED=1` — команды /tts, /scrape, /pdf и т.д.
+2. **Redeploy** на Render
+
+## Включение Instagram (если выключен)
+
+- `INSTAGRAM_PAUSED=1` — Instagram выключен
+- `INSTAGRAM_PAUSED=0` — включён
+- Нужны cookies в `data/cookies.txt` на сервере
 
 ---
 
 ## Render (чеклист)
 
-| Переменная | Сейчас (пауза) | Когда включишь |
-|------------|----------------|----------------|
-| `INSTAGRAM_PAUSED` | `1` | `0` |
-| `INSTAGRAM_COOKIES_FILE` | `/app/data/cookies.txt` | то же |
-| `INSTAGRAM_USERNAME` | пусто | пусто |
-| `INSTAGRAM_PASSWORD` | пусто | пусто |
-
-**Важно:** не храни cookies в публичном репозитории GitHub.
+| Переменная | Сейчас |
+|------------|--------|
+| `INSTAGRAM_PAUSED` | `0` (включён) |
+| `AI_ENABLED` | не задан (выключен) |
+| `WEB_SEARCH_ENABLED` | не задан (выключен) |
+| `GAMES_ENABLED` | не задан (выключен) |
+| `MEMORY_ENABLED` | не задан (выключен) |
+| `SKILLS_TOOLS_ENABLED` | не задан (выключен) |

@@ -44,7 +44,14 @@ class Settings(BaseSettings):
         alias="INSTAGRAM_COOKIES_FILE",
     )
     # true / 1 / yes — бот не трогает Instagram (ни cookies, ни логин)
-    instagram_paused: bool = Field(default=True, alias="INSTAGRAM_PAUSED")
+    instagram_paused: bool = Field(default=False, alias="INSTAGRAM_PAUSED")
+
+    # --- Feature flags (все по умолчанию выключены) ---
+    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
+    web_search_enabled: bool = Field(default=False, alias="WEB_SEARCH_ENABLED")
+    games_enabled: bool = Field(default=False, alias="GAMES_ENABLED")
+    memory_enabled: bool = Field(default=False, alias="MEMORY_ENABLED")
+    skills_tools_enabled: bool = Field(default=False, alias="SKILLS_TOOLS_ENABLED")
 
     @field_validator("instagram_paused", mode="before")
     @classmethod

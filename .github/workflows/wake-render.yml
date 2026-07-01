@@ -1,34 +1,28 @@
-name: Wake Render
+name: Keep Render Alive
 
 on:
   schedule:
-    # Times are UTC. MSK (UTC+3): 07:00, 12:00, 15:00, 18:00, 00:00
-    # UTC: 04:00, 09:00, 12:00, 15:00, 21:00
-    - cron: "0 4 * * *"
-    - cron: "0 9 * * *"
-    - cron: "0 12 * * *"
-    - cron: "0 15 * * *"
-    - cron: "0 21 * * *"
+    # Каждые 5 минут — Render free tier спит через 15 мин без запросов
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 jobs:
   wake:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
-      - name: Wake via /health
+      - name: Ping /health
         run: |
           set -euo pipefail
           URL="https://svinolink.onrender.com/health"
-          echo "Pinging $URL"
-          # Retry a bit to handle cold-start delays
-          for i in 1 2 3 4 5; do
-            if curl -fsS --max-time 25 "$URL" >/dev/null; then
-              echo "OK"
+          echo "$(date -u): Pinging $URL"
+          for i in 1 2 3; do
+            if curl -fsS --max-time 20 "$URL" >/dev/null 2>&1; then
+              echo "OK (attempt $i)"
               exit 0
             fi
-            echo "Retry $i/5"
-            sleep 10
+            echo "Retry $i/3"
+            sleep 8
           done
-          echo "Wake failed"
+          echo "FAILED — Render may be down"
           exit 1
-

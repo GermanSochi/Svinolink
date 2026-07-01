@@ -62,7 +62,7 @@ _bot_id: int | None = None
 
 
 class SvinInvokeFilter(BaseFilter):
-    """Срабатывает на «свин» в тексте или reply на сообщение бота."""
+    """Срабатывает на «свин» в тексте или reply на сообщение бота (только при AI)."""
 
     async def __call__(self, message: Message, bot: Bot) -> bool:
         global _bot_id
@@ -71,6 +71,9 @@ class SvinInvokeFilter(BaseFilter):
             return False
         if re.search(r"(?i)(свин|свинья)", text):
             return True
+        # Reply на бота ловим ТОЛЬКО когда AI включён
+        if not settings.ai_enabled:
+            return False
         replied = message.reply_to_message
         if not replied or not replied.from_user or not replied.from_user.is_bot:
             return False
@@ -123,13 +126,10 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         await message.answer(instagram_user_message())
         return
 
-    await message.answer("Сек...")
-
     file_path = None
     clean_url: str | None = None
     try:
         text = message.text or message.caption or ""
-        print(f"ПОЛУЧЕНО СООБЩЕНИЕ ИЗ ГРУППЫ: {text}")
         logger.info(
             "instagram_handler chat=%s type=%s text=%r",
             message.chat.id,
@@ -368,66 +368,70 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             await reply_formatted(message, reply)
             return
 
-        if is_chat_examples_request(text):
-            reply = await chat_examples_markdown(message.chat.id)
-            logger.info("chat_examples chat=%s", message.chat.id)
-            await reply_formatted(message, reply)
-            return
-
         if is_capabilities_question(text):
             await reply_formatted(message, capabilities_markdown())
             return
 
-        web_reply = await try_web_search_reply(message)
-        if web_reply:
-            await reply_photo_then_text(
-                message, web_reply.text, web_reply.photo_bytes
-            )
-            return
-        # только ссылка без «Свин» — ниже уйдёт в GPT; IG ловится отдельным хендлером
+        if settings.web_search_enabled:
+            web_reply = await try_web_search_reply(message)
+            if web_reply:
+                await reply_photo_then_text(
+                    message, web_reply.text, web_reply.photo_bytes
+                )
+                return
 
-        tone_reply = await try_personality_or_roster(message)
-        if tone_reply:
-            await reply_formatted(message, tone_reply)
-            return
-
-        if is_who_in_chat_question(text):
-            reply = await who_in_chat_reply(message.chat.id)
-            if reply:
+        if settings.ai_enabled:
+            if is_chat_examples_request(text):
+                reply = await chat_examples_markdown(message.chat.id)
+                logger.info("chat_examples chat=%s", message.chat.id)
                 await reply_formatted(message, reply)
                 return
 
-        user_log = await user_messages_markdown(message.chat.id, text)
-        if user_log:
-            await reply_formatted(message, user_log)
-            return
+            tone_reply = await try_personality_or_roster(message)
+            if tone_reply:
+                await reply_formatted(message, tone_reply)
+                return
 
-        # Мемы/видосы отключены по просьбе (пока без генерации картинок).
+            if is_who_in_chat_question(text):
+                reply = await who_in_chat_reply(message.chat.id)
+                if reply:
+                    await reply_formatted(message, reply)
+                    return
 
-        # Игровой роутер: Yandex возвращает JSON, мы исполняем в БД.
-        routed = await route_intent(text)
-        if routed["is_game_action"] and routed["game_id"] != "none":
-            data = await execute_game_action(
-                chat_id=message.chat.id,
-                telegram_user_id=uid,
-                username=message.from_user.username,
-                game_id=routed["game_id"],
-                action_type=routed["action_type"],
-                payload=routed["payload"],
+            user_log = await user_messages_markdown(message.chat.id, text)
+            if user_log:
+                await reply_formatted(message, user_log)
+                return
+
+            if settings.games_enabled:
+                routed = await route_intent(text)
+                if routed["is_game_action"] and routed["game_id"] != "none":
+                    data = await execute_game_action(
+                        chat_id=message.chat.id,
+                        telegram_user_id=uid,
+                        username=message.from_user.username,
+                        game_id=routed["game_id"],
+                        action_type=routed["action_type"],
+                        payload=routed["payload"],
+                    )
+                    resp = render_game_response(routed["game_id"], routed["action_type"], data)
+                    await reply_formatted(message, resp)
+                    return
+
+            if not ai_quota.can_ask(uid):
+                await message.reply(ai_quota.limit_exceeded_message())
+                return
+
+            prompt, system = await svin_prompt_with_memory(message.chat.id, text)
+            answer = await gpt.reply(prompt, system=system)
+            ai_quota.record(uid)
+            await reply_formatted(message, answer)
+        else:
+            # AI выключен — отвечаем заглушкой
+            await reply_formatted(
+                message,
+                "🐷 ИИ-режим выключен. Могу скачать видео по ссылке Instagram.",
             )
-            # Важное: ответ всегда строим от результата движка, чтобы не было "шляпы".
-            resp = render_game_response(routed["game_id"], routed["action_type"], data)
-            await reply_formatted(message, resp)
-            return
-
-        if not ai_quota.can_ask(uid):
-            await message.reply(ai_quota.limit_exceeded_message())
-            return
-
-        prompt, system = await svin_prompt_with_memory(message.chat.id, text)
-        answer = await gpt.reply(prompt, system=system)
-        ai_quota.record(uid)
-        await reply_formatted(message, answer)
     except Exception as e:
         logger.error("svin_ai error: %s", e, exc_info=True)
         await reply_formatted(message, yandex_error_message())

@@ -5,6 +5,7 @@ import json
 import logging
 from contextlib import suppress
 
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -19,6 +20,8 @@ from game_init import init_game_db
 from webapp_server import STATIC, register_miniapp_routes
 
 logger = logging.getLogger(__name__)
+
+SELF_PING_INTERVAL = 300  # 5 минут
 
 
 async def apply_webhook(bot: Bot) -> str:
@@ -128,14 +131,17 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             hooked = await apply_webhook(bot)
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
-            logger.info("Listening POST %s | Mini App %s", route, settings.miniapp_url or "off")
+            app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
+            logger.info("Listening POST %s | Mini App %s | self-ping every %ss",
+                        route, settings.miniapp_url or "off", SELF_PING_INTERVAL)
 
         async def on_shutdown(app: web.Application) -> None:
-            task = app.get("style_task")
-            if task:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+            for key in ("style_task", "keepalive_task"):
+                task = app.get(key)
+                if task:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
             with suppress(Exception):
                 await bot.delete_webhook(drop_pending_updates=False)
 
@@ -151,7 +157,9 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             await bot.delete_webhook(drop_pending_updates=True)
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
-            logger.info("Polling mode | Mini App %s", settings.miniapp_url or "off")
+            app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
+            logger.info("Polling mode | Mini App %s | self-ping every %ss",
+                        settings.miniapp_url or "off", SELF_PING_INTERVAL)
 
         app.on_startup.append(on_startup)
 
@@ -166,6 +174,22 @@ async def run_http_forever(app: web.Application) -> None:
     logger.info("HTTP server on 0.0.0.0:%s", settings.port)
     while True:
         await asyncio.sleep(3600)
+
+
+async def _self_ping_loop(port: int) -> None:
+    """Пингует /health каждые 5 минут — не даёт Render заснуть."""
+    url = f"http://127.0.0.1:{port}/health"
+    while True:
+        await asyncio.sleep(SELF_PING_INTERVAL)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        logger.debug("self-ping OK")
+                    else:
+                        logger.warning("self-ping HTTP %s", resp.status)
+        except Exception as exc:
+            logger.warning("self-ping failed: %s", exc)
 
 
 async def run_polling_with_http(bot: Bot, dp: Dispatcher) -> None:

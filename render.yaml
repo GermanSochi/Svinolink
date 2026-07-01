@@ -16,22 +16,26 @@ services:
         value: webhook
       - key: PUBLIC_BASE_URL
         sync: false
-      - key: YANDEX_API_KEY
-        sync: false
-      - key: YANDEX_FOLDER_ID
-        value: b1g3l4knr91bsq8mqhaq
-      - key: SUPABASE_DATABASE_URL
-        sync: false
       - key: ADMIN_IDS
         sync: false
       - key: INSTAGRAM_PAUSED
-        value: "1"
+        value: "0"
       - key: INSTAGRAM_COOKIES_FILE
         value: /app/data/cookies.txt
       - key: INSTAGRAM_USERNAME
         sync: false
       - key: INSTAGRAM_PASSWORD
         sync: false
+      - key: AI_ENABLED
+        value: "0"
+      - key: WEB_SEARCH_ENABLED
+        value: "0"
+      - key: GAMES_ENABLED
+        value: "0"
+      - key: MEMORY_ENABLED
+        value: "0"
+      - key: SKILLS_TOOLS_ENABLED
+        value: "0"
       - key: DOWNLOADS_DIR
         value: /app/downloads
       - key: PORT

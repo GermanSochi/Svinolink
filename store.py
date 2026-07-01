@@ -439,8 +439,6 @@ class TriggerStore:
                 elif rule.match == "word":
                     # Токен-матчинг: "сегодня ... да" сработает, а "правда" — нет.
                     # Граница слова по \w (unicode): подходит для кириллицы.
-                    import re
-
                     pat = rf"(?<!\w){re.escape(word)}(?!\w)"
                     if re.search(pat, normalized, flags=re.UNICODE):
                         return rule

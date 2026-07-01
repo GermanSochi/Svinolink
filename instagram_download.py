@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
-import shutil
-import time
+import subprocess
 import uuid
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 TELEGRAM_MAX_BYTES = 52_428_800  # 50 MiB
 INSTAGRAM_REQUEST_TIMEOUT = 15
 DOWNLOAD_MAX_RETRIES = 2
-DOWNLOAD_RETRY_DELAY_SEC = 1.5
-DOWNLOAD_TOTAL_TIMEOUT_SEC = 75
+DOWNLOAD_RETRY_DELAY_SEC = 0.3
+DOWNLOAD_TOTAL_TIMEOUT_SEC = 30
 
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
@@ -215,6 +215,193 @@ def _dest_path() -> Path:
     return _downloads_dir() / f"{uuid.uuid4().hex}.mp4"
 
 
+# ── Private API: самый быстрый путь ──────────────────────────────────
+
+_SHORTCODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+def _shortcode_to_media_id(shortcode: str) -> int:
+    """Конвертирует shortcode в numeric media_id (base64-like)."""
+    result = 0
+    for ch in shortcode:
+        result = result * 64 + _SHORTCODE_CHARS.index(ch)
+    return result
+
+
+def _extract_shortcode(url: str) -> str | None:
+    """Извлекает shortcode из URL (/reel/XXX/ или /p/XXX/)."""
+    import re
+    m = re.search(r"/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", url)
+    return m.group(1) if m else None
+
+
+def _load_cookies_dict() -> dict[str, str]:
+    """Загружает cookies.txt в dict для requests."""
+    path = _cookies_file()
+    if not path.is_file():
+        return {}
+    return _parse_netscape_cookie_dict(path)
+
+
+def _download_via_private_api(url: str) -> Path | None:
+    """
+    Прямой путь: shortcode → media_id → /api/v1/media/{id}/info/
+    → прямая ссылка на видео → stream в память → запись на диск.
+    Самый быстрый метод (~0.5-2с на скачивание).
+    """
+    shortcode = _extract_shortcode(url)
+    if not shortcode:
+        return None
+
+    cookies = _load_cookies_dict()
+    if not cookies.get("sessionid"):
+        return None
+
+    media_id = _shortcode_to_media_id(shortcode)
+    api_url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
+
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android",
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+        "Accept-Language": "en-US",
+    }
+
+    try:
+        resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=10)
+        if resp.status_code != 200:
+            logger.info("private API %s returned %s", media_id, resp.status_code)
+            return None
+
+        data = resp.json()
+        media = data.get("items", [{}])[0]
+
+        # Ищем URL видео
+        video_url = media.get("video_versions", [{}])[0].get("url") if media.get("video_versions") else None
+        if not video_url:
+            # Carousel — берём первый видео-элемент
+            carousel = media.get("carousel_media", [])
+            for item in carousel:
+                if item.get("video_versions"):
+                    video_url = item["video_versions"][0].get("url")
+                    break
+
+        if not video_url:
+            logger.info("private API: no video URL in response for %s", shortcode)
+            return None
+
+        # Скачиваем видео напрямую по URL → на диск
+        dest = _dest_path()
+        with requests.get(video_url, stream=True, timeout=15, headers=headers) as dl:
+            dl.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in dl.iter_content(chunk_size=65536):
+                    f.write(chunk)
+
+        if dest.stat().st_size < 1024:
+            dest.unlink(missing_ok=True)
+            return None
+
+        check_file_size(dest, source_url=url)
+        logger.info("private-api OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+        return dest
+    except Exception as exc:
+        logger.info("private API failed for %s: %s", url, exc)
+        return None
+
+
+# ── yt-dlp: быстрое извлечение прямой ссылки ──────────────────────────
+
+
+def _ytdlp_extract_url(url: str) -> str | None:
+    """Извлекает прямую ссылку на видео через yt-dlp (без скачивания)."""
+    try:
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--no-warnings",
+                "--no-check-certificates",
+                "--no-playlist",
+                "-j",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+        if result.returncode != 0:
+            logger.info("yt-dlp extract failed: %s", result.stderr[:200])
+            return None
+
+        info = json.loads(result.stdout)
+        video_url = info.get("url")
+        if not video_url:
+            formats = info.get("formats", [])
+            if formats:
+                # Берём лучший MP4-формат
+                mp4s = [f for f in formats if f.get("vcodec", "none") != "none"]
+                if mp4s:
+                    video_url = mp4s[-1].get("url")
+        return video_url
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
+        logger.info("yt-dlp extract error: %s", exc)
+        return None
+
+
+def _download_direct_url(direct_url: str, dest: Path) -> None:
+    """Скачивает видео по прямой URL через requests."""
+    with requests.get(direct_url, stream=True, timeout=20) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+
+
+def _download_ytdlp_fast(url: str) -> Path | None:
+    """Быстрый путь: yt-dlp извлекает URL → requests скачивает."""
+    direct = _ytdlp_extract_url(url)
+    if not direct:
+        return None
+    dest = _dest_path()
+    _download_direct_url(direct, dest)
+    if dest.stat().st_size < 1024:
+        dest.unlink(missing_ok=True)
+        return None
+    check_file_size(dest, source_url=url)
+    logger.info("ytdlp-fast OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+    return dest
+
+
+def _download_ytdlp_fallback(url: str) -> Path:
+    """Полный fallback: yt-dlp скачивает сам."""
+    dest = _dest_path()
+    result = subprocess.run(
+        [
+            "yt-dlp",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--no-playlist",
+            "-f", "best[ext=mp4]/best",
+            "-o", str(dest),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=25,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed: {result.stderr[:200]}")
+    if not dest.exists():
+        # yt-dlp может добавить расширение
+        candidates = list(dest.parent.glob(f"{dest.stem}*"))
+        if candidates:
+            dest = candidates[0]
+        else:
+            raise RuntimeError("yt-dlp: файл не создан")
+    check_file_size(dest, source_url=url)
+    logger.info("ytdlp-fallback OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+    return dest
+
+
 def _is_timeout_error(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError):
         return True
@@ -306,8 +493,9 @@ def _download_instagram_video_once(clean: str) -> Path:
         logger.info("clip_download failed, trying video_download: %s", exc)
         raw_path = cl.video_download(media_pk, folder=folder)
 
+    # Переименовываем вместо копирования — экономим время и диск
     dest = _dest_path()
-    shutil.copy2(raw_path, dest)
+    os.rename(str(raw_path), str(dest))
     check_file_size(dest, source_url=clean)
     logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
     return dest
@@ -315,8 +503,7 @@ def _download_instagram_video_once(clean: str) -> Path:
 
 def download_instagram_video(url: str) -> Path:
     """
-    Скачивание Reel через instagrapi (экосистема subzeroid).
-    yt-dlp не используется — только instagrapi.
+    Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
     """
     if settings.instagram_paused:
         raise RuntimeError(INSTAGRAM_PAUSED_MSG)
@@ -327,6 +514,29 @@ def download_instagram_video(url: str) -> Path:
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/ или /p/")
 
+    # Путь 1: Instagram private API — напрямую (~0.5-2с)
+    try:
+        path = _download_via_private_api(clean)
+        if path:
+            return path
+    except Exception as exc:
+        logger.warning("private-api failed: %s", exc)
+
+    # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
+    try:
+        path = _download_ytdlp_fast(clean)
+        if path:
+            return path
+    except Exception as exc:
+        logger.warning("ytdlp-fast failed: %s", exc)
+
+    # Путь 3: yt-dlp полный fallback (~3-8с)
+    try:
+        return _download_ytdlp_fallback(clean)
+    except Exception as exc:
+        logger.warning("ytdlp-fallback failed: %s", exc)
+
+    # Путь 4: instagrapi — последний fallback
     from instagrapi.exceptions import ClientError
 
     last_exc: Exception | None = None
@@ -341,29 +551,19 @@ def download_instagram_video(url: str) -> Path:
             last_exc = exc
             if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
                 logger.warning(
-                    "instagrapi timeout attempt %s/%s for %s: %s",
-                    attempt + 1,
-                    DOWNLOAD_MAX_RETRIES,
-                    clean,
-                    exc,
+                    "instagrapi timeout attempt %s/%s: %s",
+                    attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
                 )
-                time.sleep(DOWNLOAD_RETRY_DELAY_SEC)
                 continue
-            logger.error("instagrapi ClientError %s: %s", clean, exc, exc_info=True)
             raise _runtime_error_for(exc) from exc
         except Exception as exc:
             last_exc = exc
             if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
                 logger.warning(
-                    "instagrapi timeout attempt %s/%s for %s: %s",
-                    attempt + 1,
-                    DOWNLOAD_MAX_RETRIES,
-                    clean,
-                    exc,
+                    "instagrapi timeout attempt %s/%s: %s",
+                    attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
                 )
-                time.sleep(DOWNLOAD_RETRY_DELAY_SEC)
                 continue
-            logger.error("instagrapi failed %s: %s", clean, exc, exc_info=True)
             raise _runtime_error_for(exc) from exc
 
     if last_exc is not None:
