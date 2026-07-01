@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 import uuid
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
@@ -70,6 +71,22 @@ def _parse_netscape_cookie_dict(path: Path) -> dict[str, str]:
     return cookies
 
 
+def _load_cookies_from_env() -> dict[str, str] | None:
+    """Загружает cookies из env INSTAGRAM_COOKIES_JSON (Netscape-табличный текст)."""
+    raw = os.environ.get("INSTAGRAM_COOKIES_JSON", "").strip()
+    if not raw:
+        return None
+    cookies: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            cookies[parts[5]] = parts[6]
+    return cookies if cookies else None
+
+
 def _cookie_jar_from_netscape(path: Path) -> requests.cookies.RequestsCookieJar:
     jar = MozillaCookieJar()
     jar.load(str(path), ignore_discard=True, ignore_expires=True)
@@ -110,6 +127,26 @@ def _load_cookies_into_client(cl, path: Path) -> None:
         _apply_netscape_cookies(cl, path)
 
 
+def _apply_env_cookies(cl) -> None:
+    """Применяет cookies из INSTAGRAM_COOKIES_JSON env var напрямую в клиент."""
+    env_cookies = _load_cookies_from_env()
+    if not env_cookies:
+        return
+    sessionid = env_cookies.get("sessionid", "")
+    jar = requests.utils.cookiejar_from_dict(env_cookies)
+    cl.private.cookies.update(jar)
+    cl.public.cookies.update(jar)
+    cl.settings["cookies"] = dict(env_cookies)
+    if sessionid and env_cookies.get("ds_user_id"):
+        cl.authorization_data = {
+            "ds_user_id": str(env_cookies["ds_user_id"]),
+            "sessionid": sessionid,
+            "should_use_header_over_cookies": True,
+        }
+    cl.init()
+    logger.info("instagrapi: env cookies applied (user_id=%s)", cl.user_id)
+
+
 def _new_instagram_client():
     from instagrapi import Client
 
@@ -138,6 +175,13 @@ def _build_client():
                 _cookies_loaded = True
             except Exception as exc:
                 logger.error("instagrapi cookies load failed (%s): %s", cookies_path, exc)
+                raise RuntimeError(COOKIES_EXPIRED_MSG) from exc
+        elif _load_cookies_from_env():
+            try:
+                _apply_env_cookies(cl)
+                _cookies_loaded = True
+            except Exception as exc:
+                logger.error("instagrapi env cookies failed: %s", exc)
                 raise RuntimeError(COOKIES_EXPIRED_MSG) from exc
         elif session_file.is_file():
             try:
@@ -187,6 +231,10 @@ def scrub_instagram_secrets() -> None:
 def instagram_user_message() -> str:
     if settings.instagram_paused:
         return INSTAGRAM_PAUSED_MSG
+    if _cookies_loaded or (_client is not None and _client.user_id is not None):
+        return ""
+    if settings.instagram_is_active():
+        return ""
     return INSTAGRAM_NO_CREDS_MSG
 
 
@@ -237,9 +285,9 @@ def _extract_shortcode(url: str) -> str | None:
 def _load_cookies_dict() -> dict[str, str]:
     """Загружает cookies.txt в dict для requests."""
     path = _cookies_file()
-    if not path.is_file():
-        return {}
-    return _parse_netscape_cookie_dict(path)
+    if path.is_file():
+        return _parse_netscape_cookie_dict(path)
+    return _load_cookies_from_env() or {}
 
 
 def _download_via_private_api(url: str) -> Path | None:
@@ -505,6 +553,9 @@ def download_instagram_video(url: str) -> Path:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
     """
+    from bot_stats import DownloadStat, bot_stats
+
+    t0 = time.monotonic()
     if settings.instagram_paused:
         raise RuntimeError(INSTAGRAM_PAUSED_MSG)
     if not settings.instagram_is_active():
@@ -518,6 +569,8 @@ def download_instagram_video(url: str) -> Path:
     try:
         path = _download_via_private_api(clean)
         if path:
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
@@ -526,13 +579,18 @@ def download_instagram_video(url: str) -> Path:
     try:
         path = _download_ytdlp_fast(clean)
         if path:
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
 
     # Путь 3: yt-dlp полный fallback (~3-8с)
     try:
-        return _download_ytdlp_fallback(clean)
+        path = _download_ytdlp_fallback(clean)
+        ms = int((time.monotonic() - t0) * 1000)
+        bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+        return path
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
@@ -542,7 +600,10 @@ def download_instagram_video(url: str) -> Path:
     last_exc: Exception | None = None
     for attempt in range(DOWNLOAD_MAX_RETRIES):
         try:
-            return _download_instagram_video_once(clean)
+            path = _download_instagram_video_once(clean)
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+            return path
         except ValueError:
             raise
         except RuntimeError:
@@ -555,6 +616,8 @@ def download_instagram_video(url: str) -> Path:
                     attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
                 )
                 continue
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=False, method="instagrapi", size=0, elapsed_ms=ms, ts=time.time(), error=str(exc)[:120]))
             raise _runtime_error_for(exc) from exc
         except Exception as exc:
             last_exc = exc
@@ -564,6 +627,8 @@ def download_instagram_video(url: str) -> Path:
                     attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
                 )
                 continue
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=False, method="instagrapi", size=0, elapsed_ms=ms, ts=time.time(), error=str(exc)[:120]))
             raise _runtime_error_for(exc) from exc
 
     if last_exc is not None:

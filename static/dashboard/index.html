@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Svinolink — Дашборд</title>
+  <style>
+    :root {
+      --bg: #0c0a14;
+      --surface: rgba(255,255,255,.04);
+      --border: rgba(168,85,247,.18);
+      --violet: #a855f7;
+      --pink: #f472b6;
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --text: #e8e4f0;
+      --muted: #8b7faa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    .sub { color: var(--muted); font-size: .85rem; margin-bottom: 24px; }
+    .status-row {
+      display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .pill {
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: .8rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .pill.ok { border-color: var(--green); color: var(--green); }
+    .pill.warn { border-color: var(--yellow); color: var(--yellow); }
+    .pill.err { border-color: var(--red); color: var(--red); }
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+    .metric { text-align: center; }
+    .metric .val { font-size: 1.8rem; font-weight: 700; line-height: 1.2; }
+    .metric .label { font-size: .75rem; color: var(--muted); margin-top: 2px; }
+    .metric.ok .val { color: var(--green); }
+    .metric.warn .val { color: var(--yellow); }
+    .metric.err .val { color: var(--red); }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: .72rem; font-weight: 600; }
+    .tag.ok { background: rgba(74,222,128,.15); color: var(--green); }
+    .tag.err { background: rgba(248,113,113,.15); color: var(--red); }
+    .empty { color: var(--muted); text-align: center; padding: 20px; font-size: .85rem; }
+    .refresh-note { text-align: center; color: var(--muted); font-size: .72rem; margin-top: 16px; }
+    .err-line { font-size: .78rem; color: var(--red); padding: 4px 0; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>🐷 Svinolink Dashboard</h1>
+  <p class="sub">Мониторинг бота в реальном времени</p>
+
+  <div class="status-row" id="pills"></div>
+
+  <div class="section">
+    <div class="section-title">Общее</div>
+    <div class="grid" id="general"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Instagram</div>
+    <div class="grid" id="instagram"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Последние скачивания</div>
+    <div id="downloads"><div class="empty">пока пусто</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Ошибки</div>
+    <div id="errors"><div class="empty">нет ошибок</div></div>
+  </div>
+
+  <p class="refresh-note">обновление каждые 3 сек</p>
+
+<script>
+async function load() {
+  try {
+    const r = await fetch('/api/dashboard');
+    const d = await r.json();
+    render(d);
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+function h(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function pill(text, cls) {
+  const el = h('span', 'pill ' + (cls || ''), text);
+  return el;
+}
+
+function metric(val, label, cls) {
+  const d = h('div', 'metric ' + (cls || ''));
+  d.appendChild(h('div', 'val', val));
+  d.appendChild(h('div', 'label', label));
+  return d;
+}
+
+function render(d) {
+  // Pills
+  const pills = document.getElementById('pills');
+  pills.innerHTML = '';
+  pills.appendChild(pill(d.status === 'ok' ? 'ONLINE' : 'ERROR', d.status === 'ok' ? 'ok' : 'err'));
+  pills.appendChild(pill(d.mode));
+  pills.appendChild(pill('v' + d.version));
+  if (d.chat_memory === 'connected') pills.appendChild(pill('DB connected', 'ok'));
+  else if (d.chat_memory === 'configured') pills.appendChild(pill('DB configured', 'warn'));
+  else pills.appendChild(pill('DB off', 'err'));
+
+  // General
+  const gen = document.getElementById('general');
+  gen.innerHTML = '';
+  gen.appendChild(metric(d.stats.uptime, 'аптайм'));
+  gen.appendChild(metric(d.stats.messages, 'сообщений'));
+
+  // Instagram
+  const ig = document.getElementById('instagram');
+  ig.innerHTML = '';
+  const igStatus = d.instagram.active ? (d.instagram.cookies_loaded ? 'cookies OK' : 'login OK') : (d.instagram.paused ? 'пауза' : 'нет creds');
+  const igCls = d.instagram.active ? 'ok' : (d.instagram.paused ? 'warn' : 'err');
+  ig.appendChild(metric(igStatus, 'статус', igCls));
+  ig.appendChild(metric(d.instagram.user_id || '—', 'user_id'));
+  ig.appendChild(metric(d.stats.ig_success, 'скачано', 'ok'));
+  ig.appendChild(metric(d.stats.ig_fail, 'ошибки', d.stats.ig_fail ? 'err' : ''));
+  ig.appendChild(metric(d.stats.ig_bytes_human, 'трафик'));
+  if (d.instagram.last_download) {
+    ig.appendChild(metric(d.instagram.last_download.elapsed_ms + 'мс', 'последнее'));
+  }
+
+  // Downloads table
+  const dlBox = document.getElementById('downloads');
+  dlBox.innerHTML = '';
+  const downloads = d.stats.recent_downloads || [];
+  if (!downloads.length) {
+    dlBox.innerHTML = '<div class="empty">пока пусто</div>';
+  } else {
+    const tbl = document.createElement('table');
+    const thead = h('thead'); thead.innerHTML = '<tr><th>Время</th><th>Статус</th><th>Метод</th><th>Размер</th><th>Время</th></tr>';
+    tbl.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const dl of downloads.reverse()) {
+      const tr = document.createElement('tr');
+      const shortUrl = dl.url.length > 40 ? dl.url.slice(0, 37) + '...' : dl.url;
+      tr.innerHTML = `<td title="${dl.url}">${dl.ts}</td><td><span class="tag ${dl.ok ? 'ok' : 'err'}">${dl.ok ? 'OK' : 'FAIL'}</span></td><td>${dl.method}</td><td>${dl.size_human}</td><td>${dl.elapsed_ms}мс</td>`;
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    dlBox.appendChild(tbl);
+  }
+
+  // Errors
+  const errBox = document.getElementById('errors');
+  errBox.innerHTML = '';
+  const errs = d.stats.recent_errors || [];
+  if (!errs.length) {
+    errBox.innerHTML = '<div class="empty">нет ошибок</div>';
+  } else {
+    for (const e of errs.reverse()) {
+      const div = h('div', 'err-line', e);
+      errBox.appendChild(div);
+    }
+  }
+}
+
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

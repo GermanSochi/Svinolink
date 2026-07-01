@@ -11,9 +11,11 @@ from config import settings
 from deps import store
 from miniapp_auth import parse_init_data, parse_user_session
 from store import TriggerRule
+from bot_stats import bot_stats
 
 logger = logging.getLogger(__name__)
 STATIC = Path(__file__).resolve().parent / "static" / "miniapp"
+DASHBOARD_STATIC = Path(__file__).resolve().parent / "static" / "dashboard"
 
 
 def _init_data_from_request(request: web.Request) -> str:
@@ -210,3 +212,50 @@ def register_miniapp_routes(app: web.Application) -> None:
     app.router.add_get("/api/chats", api_list_chats)
     app.router.add_delete("/api/chats", api_delete_chat)
     app.router.add_post("/api/triggers", api_save_triggers)
+
+    # Dashboard
+    app.router.add_get("/dashboard", dashboard_index)
+    app.router.add_get("/dashboard/", dashboard_index)
+    app.router.add_get("/api/dashboard", api_dashboard)
+
+
+async def dashboard_index(_: web.Request) -> web.Response:
+    html = (DASHBOARD_STATIC / "index.html").read_text(encoding="utf-8")
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+async def api_dashboard(_: web.Request) -> web.Response:
+    from instagram_download import _client, _cookies_loaded, _ready
+    from chat_memory import is_pool_ready
+
+    stats = bot_stats.snapshot()
+    ig_active = settings.instagram_is_active()
+    ig_paused = settings.instagram_paused
+    ig_user_id = None
+    if _client is not None and _client.user_id is not None:
+        ig_user_id = str(_client.user_id)
+
+    payload = {
+        "status": "ok",
+        "mode": "webhook" if settings.webhook_base_url.strip() else "polling",
+        "version": settings.app_version,
+        "chat_memory": (
+            "connected"
+            if is_pool_ready()
+            else ("configured" if settings.supabase_database_url.strip() else "off")
+        ),
+        "instagram": {
+            "active": ig_active,
+            "paused": ig_paused,
+            "cookies_loaded": _cookies_loaded,
+            "client_ready": _ready,
+            "user_id": ig_user_id,
+            "last_download": stats.get("last_download"),
+        },
+        "stats": stats,
+    }
+    return web.json_response(payload)

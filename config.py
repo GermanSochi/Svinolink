@@ -137,6 +137,8 @@ class Settings(BaseSettings):
             return False
         if self.instagram_cookies_file.is_file():
             return True
+        if os.environ.get("INSTAGRAM_COOKIES_JSON", "").strip():
+            return True
         if self.instagram_session_file.is_file():
             return True
         if self.instagram_username.strip() and self.instagram_password.strip():

@@ -121,6 +121,8 @@ from admin_auth import is_admin_user  # noqa: F401 — re-export для стар
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
     from config import settings
     from instagram_download import instagram_user_message
+    from bot_stats import bot_stats
+    bot_stats.record_message()
 
     if not settings.instagram_is_active():
         await message.answer(instagram_user_message())
@@ -190,9 +192,11 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 raise
     except asyncio.TimeoutError:
         logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
+        bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url or '?'}")
         await message.answer(instagram_timeout_message())
     except Exception as e:
         logger.error("instagram handler error: %s", e, exc_info=True)
+        bot_stats.record_error(f"IG error: {str(e)[:100]}")
         await message.answer(map_instagram_error(e, clean_url))
     finally:
         if file_path is not None:
