@@ -80,7 +80,8 @@ class YandexGPT:
             raise YandexGPTError("YANDEX_FOLDER_ID не задан")
 
         await self.start()
-        assert self._session is not None
+        if self._session is None:
+            raise YandexGPTError("YandexGPT session failed to initialize")
 
         payload = {
             "modelUri": f"gpt://{folder_id}/yandexgpt/latest",

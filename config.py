@@ -85,28 +85,40 @@ class Settings(BaseSettings):
             return v.strip().rstrip("/")
         return v
 
+    _admin_ids_cache: set[int] | None = None
+
     @property
     def admin_ids(self) -> set[int]:
+        if self._admin_ids_cache is not None:
+            return self._admin_ids_cache
         out: set[int] = set()
         for part in self.admin_ids_raw.split(","):
             part = part.strip()
             if part.isdigit():
                 out.add(int(part))
+        self._admin_ids_cache = out
         return out
 
     @property
     def app_base_url(self) -> str:
         return (self.public_base_url or self.webhook_base_url).rstrip("/")
 
+    _app_version_cache: str | None = None
+
     @property
     def app_version(self) -> str:
+        if self._app_version_cache is not None:
+            return self._app_version_cache
         env = os.getenv("RENDER_GIT_COMMIT", "").strip()
         if env:
-            return env[:12]
-        version_file = BASE_DIR / "VERSION"
-        if version_file.is_file():
-            return version_file.read_text(encoding="utf-8").strip() or "dev"
-        return "dev"
+            self._app_version_cache = env[:12]
+        else:
+            version_file = BASE_DIR / "VERSION"
+            if version_file.is_file():
+                self._app_version_cache = version_file.read_text(encoding="utf-8").strip() or "dev"
+            else:
+                self._app_version_cache = "dev"
+        return self._app_version_cache
 
     @property
     def miniapp_url(self) -> str:

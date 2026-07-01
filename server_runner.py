@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
+from functools import partial
 
 import aiohttp
 from aiohttp import web
@@ -22,6 +23,14 @@ from webapp_server import STATIC, register_miniapp_routes
 logger = logging.getLogger(__name__)
 
 SELF_PING_INTERVAL = 480  # 8 минут — безопаснее 15 мин таймаута Render
+
+
+def _task_error_logger(name: str, task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task %s crashed: %s", name, exc, exc_info=exc)
 
 
 async def apply_webhook(bot: Bot) -> str:
@@ -132,6 +141,8 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
+            app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
+            app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
             logger.info("Listening POST %s | Mini App %s | self-ping every %ss",
                         route, settings.miniapp_url or "off", SELF_PING_INTERVAL)
 
@@ -158,6 +169,8 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
+            app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
+            app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
             logger.info("Polling mode | Mini App %s | self-ping every %ss",
                         settings.miniapp_url or "off", SELF_PING_INTERVAL)
 
@@ -172,25 +185,29 @@ async def run_http_forever(app: web.Application) -> None:
     site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
     await site.start()
     logger.info("HTTP server on 0.0.0.0:%s", settings.port)
-    while True:
-        await asyncio.sleep(3600)
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await runner.cleanup()
 
 
 async def _self_ping_loop(port: int) -> None:
     """Пингует /health каждые 8 минут — не даёт Render заснуть."""
     url = f"http://127.0.0.1:{port}/health"
     logger.info("self-ping started: %s every %ss", url, SELF_PING_INTERVAL)
-    while True:
-        await asyncio.sleep(SELF_PING_INTERVAL)
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            await asyncio.sleep(SELF_PING_INTERVAL)
+            try:
+                async with session.get(url) as resp:
                     if resp.status == 200:
                         logger.info("self-ping OK (%s)", url)
                     else:
                         logger.warning("self-ping HTTP %s", resp.status)
-        except Exception as exc:
-            logger.warning("self-ping failed: %s", exc)
+            except Exception as exc:
+                logger.warning("self-ping failed: %s", exc)
 
 
 async def run_polling_with_http(bot: Bot, dp: Dispatcher) -> None:

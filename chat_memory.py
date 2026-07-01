@@ -316,6 +316,10 @@ async def close_chat_memory() -> None:
         _pool = None
 
 
+_last_cleanup: float = 0.0
+_CLEANUP_INTERVAL = 3600  # раз в час
+
+
 async def _insert_message(
     conn: asyncpg.Connection,
     *,
@@ -324,24 +328,29 @@ async def _insert_message(
     username: str,
     message_text: str,
 ) -> None:
+    import time as _time
+    global _last_cleanup
     text = message_text[:4000]
-    async with conn.transaction():
-        await conn.execute(
-            """
-            INSERT INTO chat_history (chat_id, user_id, username, message_text)
-            VALUES ($1, $2, $3, $4)
-            """,
-            chat_id,
-            user_id,
-            username,
-            text,
-        )
-        await conn.execute(
-            """
-            DELETE FROM chat_history
-            WHERE created_at < NOW() - INTERVAL '3 days'
-            """
-        )
+    await conn.execute(
+        """
+        INSERT INTO chat_history (chat_id, user_id, username, message_text)
+        VALUES ($1, $2, $3, $4)
+        """,
+        chat_id,
+        user_id,
+        username,
+        text,
+    )
+    # Очистка старых записей раз в час, а не на каждое сообщение
+    now = _time.time()
+    if now - _last_cleanup > _CLEANUP_INTERVAL:
+        _last_cleanup = now
+        try:
+            await conn.execute(
+                "DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL '3 days'"
+            )
+        except Exception as exc:
+            logger.warning("chat_history cleanup failed: %s", exc)
 
 
 async def log_message(
