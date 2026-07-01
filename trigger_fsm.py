@@ -8,12 +8,7 @@ from deps import store
 router = Router(name="trigger_fsm")
 
 GROUP_GREET = "кидай ссылку Instagram — пришлю видео"
-PRIVATE_GREET = (
-    "кидай ссылку Instagram — пришлю видео\n\n"
-    "⚙️ Триггеры — кнопка меню ниже.\n\n"
-    "Чтобы группа появилась в списке: перешли мне любое сообщение "
-    "из группы (в личку) — пришлю ID."
-)
+PRIVATE_GREET = "Привет! Пришли ссылку на видео из Instagram — пришлю 🐷"
 
 
 @router.message(lambda m: m.chat.type == "private" and m.forward_from_chat is not None)
