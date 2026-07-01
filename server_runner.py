@@ -21,7 +21,7 @@ from webapp_server import STATIC, register_miniapp_routes
 
 logger = logging.getLogger(__name__)
 
-SELF_PING_INTERVAL = 300  # 5 минут
+SELF_PING_INTERVAL = 480  # 8 минут — безопаснее 15 мин таймаута Render
 
 
 async def apply_webhook(bot: Bot) -> str:
@@ -177,15 +177,16 @@ async def run_http_forever(app: web.Application) -> None:
 
 
 async def _self_ping_loop(port: int) -> None:
-    """Пингует /health каждые 5 минут — не даёт Render заснуть."""
+    """Пингует /health каждые 8 минут — не даёт Render заснуть."""
     url = f"http://127.0.0.1:{port}/health"
+    logger.info("self-ping started: %s every %ss", url, SELF_PING_INTERVAL)
     while True:
         await asyncio.sleep(SELF_PING_INTERVAL)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
-                        logger.debug("self-ping OK")
+                        logger.info("self-ping OK (%s)", url)
                     else:
                         logger.warning("self-ping HTTP %s", resp.status)
         except Exception as exc:
