@@ -8,7 +8,7 @@ import io
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
-from aiogram.types import FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import ai_quota
 from config import settings
@@ -55,7 +55,6 @@ def _redact_secrets(text: str) -> str:
         out = pat.sub(repl, out)
     return out
 
-CAPTION = "Svinolink любит донаты"
 TELEGRAM_MAX_BYTES = 52_428_800
 
 _bot_id: int | None = None
@@ -118,6 +117,9 @@ IG_LINK_FILTER = InstagramAnyFilter()
 from admin_auth import is_admin_user  # noqa: F401 — re-export для старых импортов
 
 
+_ig_caption_cache: dict[str, str] = {}
+
+
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
     from config import settings
     from instagram_download import instagram_user_message
@@ -157,7 +159,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             )
 
         logger.info("IG clean_url=%s", clean_url)
-        file_path = await asyncio.wait_for(
+        file_path, caption = await asyncio.wait_for(
             asyncio.to_thread(download_instagram_video, clean_url),
             timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
         )
@@ -170,14 +172,35 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             return
 
         max_retries = 2
+        sent_msg = None
         for attempt in range(max_retries):
             try:
-                await message.answer_video(
-                    video=FSInputFile(file_path),
-                    caption=CAPTION,
-                    reply_to_message_id=message.message_id,
-                    supports_streaming=True,
-                )
+                if caption.strip():
+                    # Кэшируем caption по message_id видео чтобы callback мог достать
+                    sent_msg = await message.answer_video(
+                        video=FSInputFile(file_path),
+                        reply_to_message_id=message.message_id,
+                        supports_streaming=True,
+                    )
+                    # Сохраняем caption с привязкой к chat+video message_id
+                    cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
+                    _ig_caption_cache[cache_key] = caption
+                    # Чистим старые записи (макс 100)
+                    if len(_ig_caption_cache) > 100:
+                        old_keys = list(_ig_caption_cache.keys())[:50]
+                        for k in old_keys:
+                            _ig_caption_cache.pop(k, None)
+                    # Добавляем inline кнопку
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📝 Получить текст", callback_data=f"igtxt:{cache_key}")]
+                    ])
+                    await sent_msg.edit_reply_markup(reply_markup=kb)
+                else:
+                    await message.answer_video(
+                        video=FSInputFile(file_path),
+                        reply_to_message_id=message.message_id,
+                        supports_streaming=True,
+                    )
                 break
             except Exception as e:
                 if "timeout" in str(e).lower() and attempt < max_retries - 1:
@@ -206,6 +229,20 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 remove_file(file_path)
             except Exception:
                 pass
+
+
+async def handle_ig_text_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    if not data.startswith("igtxt:"):
+        return
+    cache_key = data[6:]
+    caption = _ig_caption_cache.pop(cache_key, "")
+    if not caption:
+        await callback.answer("Текст не найден (кэш истёк)", show_alert=True)
+        return
+    await callback.answer()
+    # Отправляем текст отдельным сообщением
+    await callback.message.answer(caption)
 
 
 async def handle_svin_ai(message: Message, bot: Bot) -> None:

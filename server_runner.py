@@ -202,7 +202,7 @@ async def run_polling_with_http(bot: Bot, dp: Dispatcher) -> None:
         await dp.start_polling(
             bot,
             drop_pending_updates=True,
-            allowed_updates=["message", "my_chat_member"],
+            allowed_updates=["message", "callback_query", "my_chat_member"],
         )
 
     poll_task = asyncio.create_task(poll())

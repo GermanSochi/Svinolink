@@ -14,6 +14,7 @@ from chat_handlers import (
     IG_LINK_FILTER,
     SVIN_AI_FILTER,
     SVIN_CAPTION_FILTER,
+    handle_ig_text_callback,
     handle_instagram_link,
     handle_svin_ai,
     router as chat_router,
@@ -74,6 +75,7 @@ def _build_dispatcher() -> Dispatcher:
     if settings.skills_tools_enabled:
         dp.include_router(skills_router)
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
+    dp.callback_query.register(handle_ig_text_callback, F.data.startswith("igtxt:"))
     if settings.memory_enabled:
         dp.include_router(memory_router)
     dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)

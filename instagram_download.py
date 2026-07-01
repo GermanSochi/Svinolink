@@ -291,11 +291,12 @@ def _load_cookies_dict() -> dict[str, str]:
     return _load_cookies_from_env() or {}
 
 
-def _download_via_private_api(url: str) -> Path | None:
+def _download_via_private_api(url: str) -> tuple[Path, str] | None:
     """
     Прямой путь: shortcode → media_id → /api/v1/media/{id}/info/
     → прямая ссылка на видео → stream в память → запись на диск.
     Самый быстрый метод (~0.5-2с на скачивание).
+    Возвращает (path, caption).
     """
     shortcode = _extract_shortcode(url)
     if not shortcode:
@@ -323,6 +324,14 @@ def _download_via_private_api(url: str) -> Path | None:
 
         data = resp.json()
         media = data.get("items", [{}])[0]
+
+        # Caption (текст под видео)
+        caption_obj = media.get("caption")
+        caption = ""
+        if isinstance(caption_obj, dict):
+            caption = caption_obj.get("text", "")
+        elif isinstance(caption_obj, str):
+            caption = caption_obj
 
         # Ищем URL видео
         video_url = media.get("video_versions", [{}])[0].get("url") if media.get("video_versions") else None
@@ -352,7 +361,7 @@ def _download_via_private_api(url: str) -> Path | None:
 
         check_file_size(dest, source_url=url)
         logger.info("private-api OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
-        return dest
+        return dest, caption
     except Exception as exc:
         logger.info("private API failed for %s: %s", url, exc)
         return None
@@ -562,9 +571,10 @@ def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
-def download_instagram_video(url: str) -> Path:
+def download_instagram_video(url: str) -> tuple[Path, str]:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
+    Возвращает (path, caption).
     """
     from bot_stats import DownloadStat, bot_stats
 
@@ -580,11 +590,12 @@ def download_instagram_video(url: str) -> Path:
 
     # Путь 1: Instagram private API — напрямую (~0.5-2с)
     try:
-        path = _download_via_private_api(clean)
-        if path:
+        result = _download_via_private_api(clean)
+        if result:
+            path, caption = result
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path
+            return path, caption
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
@@ -594,7 +605,7 @@ def download_instagram_video(url: str) -> Path:
         if path:
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path
+            return path, ""
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
 
@@ -603,7 +614,7 @@ def download_instagram_video(url: str) -> Path:
         path = _download_ytdlp_fallback(clean)
         ms = int((time.monotonic() - t0) * 1000)
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-        return path
+        return path, ""
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
@@ -616,7 +627,7 @@ def download_instagram_video(url: str) -> Path:
             path = _download_instagram_video_once(clean)
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path
+            return path, ""
         except ValueError:
             raise
         except RuntimeError:
