@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,6 +49,7 @@ _client = None
 _client_lock = Lock()
 _ready = False
 _cookies_loaded = False
+_download_semaphore = asyncio.Semaphore(3)  # макс 3 параллельных скачивания
 
 
 def _downloads_dir() -> Path:

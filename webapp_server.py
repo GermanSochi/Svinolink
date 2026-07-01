@@ -228,6 +228,20 @@ async def dashboard_index(_: web.Request) -> web.Response:
     )
 
 
+_miniapp_manual_input: bool | None = None
+
+
+def _check_miniapp_manual_input() -> bool:
+    global _miniapp_manual_input
+    if _miniapp_manual_input is None:
+        try:
+            html = (STATIC / "index.html").read_text(encoding="utf-8")
+            _miniapp_manual_input = "manualChatId" in html
+        except OSError:
+            _miniapp_manual_input = False
+    return _miniapp_manual_input
+
+
 async def api_dashboard(_: web.Request) -> web.Response:
     from instagram_download import _client, _cookies_loaded, _ready
     from chat_memory import is_pool_ready

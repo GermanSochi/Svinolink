@@ -35,6 +35,8 @@ class TriggerStore:
         (settings.data_dir / "chats").mkdir(parents=True, exist_ok=True)
         self._db = settings.data_dir / "svinolink.db"
         self._init_db()
+        self._defaults_cache: list[TriggerRule] | None = None
+        self._custom_cache: dict[int, tuple[float, list[TriggerRule]]] = {}
         # Страховка: основная группа всегда активна в Mini App.
         try:
             self.register_chat(PRIMARY_CHAT_ID, title="Основная группа", chat_type="supergroup", active=True)
@@ -104,9 +106,20 @@ class TriggerStore:
         return out
 
     def load_defaults(self) -> list[TriggerRule]:
-        return self._load_json_rules(settings.triggers_file, builtin=True)
+        if self._defaults_cache is not None:
+            return self._defaults_cache
+        self._defaults_cache = self._load_json_rules(settings.triggers_file, builtin=True)
+        return self._defaults_cache
+
+    def invalidate_defaults_cache(self) -> None:
+        self._defaults_cache = None
 
     def load_custom(self, chat_id: int) -> list[TriggerRule]:
+        now = time.time()
+        cached = self._custom_cache.get(chat_id)
+        if cached and (now - cached[0]) < 60:
+            return cached[1]
+        result: list[TriggerRule] = []
         if self._supabase_enabled():
             try:
                 from trigger_supabase import (
@@ -117,19 +130,22 @@ class TriggerStore:
 
                 rules = run_async(load_custom_triggers(chat_id))
                 if rules:
-                    return rules
-                file_rules = self._load_json_rules(
-                    self._chat_path(chat_id), builtin=False
-                )
-                if file_rules:
-                    run_async(save_custom_triggers(chat_id, file_rules))
-                    return file_rules
-                return []
+                    result = rules
+                else:
+                    file_rules = self._load_json_rules(
+                        self._chat_path(chat_id), builtin=False
+                    )
+                    if file_rules:
+                        run_async(save_custom_triggers(chat_id, file_rules))
+                        result = file_rules
             except Exception as exc:
                 logger.warning(
                     "load_custom supabase chat=%s: %s", chat_id, exc
                 )
-        return self._load_json_rules(self._chat_path(chat_id), builtin=False)
+        if not result:
+            result = self._load_json_rules(self._chat_path(chat_id), builtin=False)
+        self._custom_cache[chat_id] = (now, result)
+        return result
 
     def load_triggers(self, chat_id: int) -> list[TriggerRule]:
         return self.load_defaults() + self.load_custom(chat_id)
@@ -140,6 +156,7 @@ class TriggerStore:
         return is_memory_enabled()
 
     def save_custom(self, chat_id: int, rules: list[TriggerRule]) -> None:
+        self._custom_cache.pop(chat_id, None)
         payload = {
             "triggers": [
                 {
@@ -371,9 +388,11 @@ class TriggerStore:
         path = self._style_path(chat_id)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"t": time.time(), "p": phrase}, ensure_ascii=False) + "\n")
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if len(lines) > 30:
-            path.write_text("\n".join(lines[-30:]) + "\n", encoding="utf-8")
+        # Обрезаем только если файл вырос сильно (>50 строк), чтобы не перезаписывать каждый раз
+        if path.is_file():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 50:
+                path.write_text("\n".join(lines[-30:]) + "\n", encoding="utf-8")
 
     def style_hints(self, chat_id: int, limit: int = 8) -> list[str]:
         path = self._style_path(chat_id)

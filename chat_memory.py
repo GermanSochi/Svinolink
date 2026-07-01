@@ -210,7 +210,8 @@ async def _open_pool(url: str) -> asyncpg.Pool:
                 params.port,
                 exc,
             )
-    assert last_exc is not None
+    if last_exc is None:
+        raise RuntimeError("all pool password attempts failed")
     raise last_exc
 
 
@@ -225,7 +226,8 @@ async def _connect_once(url: str) -> asyncpg.Connection:
             )
         except Exception as exc:
             last_exc = exc
-    assert last_exc is not None
+    if last_exc is None:
+        raise RuntimeError("all password attempts failed")
     raise last_exc
 
 

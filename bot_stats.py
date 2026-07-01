@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from threading import Lock
 
@@ -26,8 +27,8 @@ class BotStats:
     instagram_fail: int = 0
     instagram_bytes: int = 0
     last_download: DownloadStat | None = None
-    recent_downloads: list[DownloadStat] = field(default_factory=list)
-    recent_errors: list[str] = field(default_factory=list)
+    recent_downloads: deque[DownloadStat] = field(default_factory=lambda: deque(maxlen=20))
+    recent_errors: deque[str] = field(default_factory=lambda: deque(maxlen=15))
     _lock: Lock = field(default_factory=Lock, repr=False)
 
     def record_download(self, stat: DownloadStat) -> None:
@@ -40,8 +41,6 @@ class BotStats:
                 self.instagram_fail += 1
             self.last_download = stat
             self.recent_downloads.append(stat)
-            if len(self.recent_downloads) > 20:
-                self.recent_downloads = self.recent_downloads[-20:]
 
     def record_message(self) -> None:
         with self._lock:
@@ -51,8 +50,6 @@ class BotStats:
         with self._lock:
             ts = time.strftime("%H:%M:%S")
             self.recent_errors.append(f"[{ts}] {msg}")
-            if len(self.recent_errors) > 15:
-                self.recent_errors = self.recent_errors[-15:]
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -69,7 +66,7 @@ class BotStats:
                 "ig_bytes": self.instagram_bytes,
                 "ig_bytes_human": _human_bytes(self.instagram_bytes),
                 "last_download": _dl_to_dict(self.last_download),
-                "recent_downloads": [_dl_to_dict(d) for d in self.recent_downloads[-10:]],
+                "recent_downloads": [_dl_to_dict(d) for d in list(self.recent_downloads)[-10:]],
                 "recent_errors": list(self.recent_errors),
             }
 

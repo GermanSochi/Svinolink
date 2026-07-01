@@ -159,10 +159,12 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             )
 
         logger.info("IG clean_url=%s", clean_url)
-        file_path, caption = await asyncio.wait_for(
-            asyncio.to_thread(download_instagram_video, clean_url),
-            timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
-        )
+        from instagram_download import _download_semaphore
+        async with _download_semaphore:
+            file_path, caption = await asyncio.wait_for(
+                asyncio.to_thread(download_instagram_video, clean_url),
+                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+            )
 
         size = os.path.getsize(file_path)
         if size > TELEGRAM_MAX_BYTES:
