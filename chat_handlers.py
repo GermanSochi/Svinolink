@@ -180,8 +180,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         sent_msg = None
         for attempt in range(max_retries):
             try:
-                # Caption: 📝 сверху + рекламный блок снизу
-                video_caption = f"📝\n\n{_AD_TEXT}\n{_AD_LINK}"
+                # Caption: рекламный блок
+                video_caption = f"{_AD_TEXT}\n{_AD_LINK}"
 
                 if caption.strip():
                     sent_msg = await message.answer_video(
