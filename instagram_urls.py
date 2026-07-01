@@ -11,12 +11,14 @@ _INSTAGRAM_LOOSE = re.compile(
     r"(?:https?://)?(?:www\.)?instagram\.com(?:/[a-zA-Z0-9_./?=&%-]*)?",
     re.IGNORECASE,
 )
-_MEDIA_PATH = re.compile(r"/(reel|reels|p|tv)/", re.IGNORECASE)
+_MEDIA_PATH = re.compile(r"/(reel|reels|p|tv|stories|s)/", re.IGNORECASE)
 
 
 def clean_instagram_url(url: str) -> str:
     raw = url.strip().strip("()[]<>.,!?:;\"'")
-    if "?" in raw:
+    # Для Highlights (/s/) сохраняем query string (story_media_id нужен)
+    is_highlight = "/s/" in raw.lower()
+    if not is_highlight and "?" in raw:
         raw = raw.split("?", 1)[0]
     if "#" in raw:
         raw = raw.split("#", 1)[0]
@@ -32,7 +34,10 @@ def clean_instagram_url(url: str) -> str:
     elif not host.endswith("instagram.com"):
         host = "www.instagram.com"
     path = parsed.path or ""
-    return f"https://{host}{path}"
+    result = f"https://{host}{path}"
+    if is_highlight and parsed.query:
+        result += f"?{parsed.query}"
+    return result
 
 
 def is_instagram_media_url(url: str) -> bool:

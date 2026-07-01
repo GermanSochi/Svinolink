@@ -155,7 +155,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             raise ValueError("не удалось вытащить ссылку Instagram из сообщения")
         if not is_instagram_media_url(clean_url):
             raise ValueError(
-                "нужна ссылка на Reel или пост (/reel/ или /p/), а не просто instagram.com"
+                "нужна ссылка на Reel, пост, сторис или актуальное (/reel/, /p/, /stories/, /s/)"
             )
 
         logger.info("IG clean_url=%s", clean_url)

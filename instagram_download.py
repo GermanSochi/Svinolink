@@ -279,8 +279,31 @@ def _shortcode_to_media_id(shortcode: str) -> int:
 
 
 def _extract_shortcode(url: str) -> str | None:
-    """Извлекает shortcode из URL (/reel/XXX/ или /p/XXX/)."""
+    """Извлекает shortcode/media_id из URL.
+
+    Поддерживает: /reel/XXX, /p/XXX, /tv/XXX, /stories/user/ID, /s/ID?story_media_id=XXX
+    """
     import re
+    from urllib.parse import urlparse, parse_qs
+
+    # Stories: /stories/username/3121992728853110933
+    m = re.search(r"/stories/[^/]+/(\d+)", url)
+    if m:
+        return m.group(1)
+
+    # Highlights: /s/XXX?story_media_id=1823418211811645388
+    if "/s/" in url:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        story_id = qs.get("story_media_id", [None])[0]
+        if story_id:
+            return story_id
+        # Fallback: extract base64 ID from path
+        m = re.search(r"/s/([A-Za-z0-9_-]+)", url)
+        if m:
+            return m.group(1)
+
+    # Reels/Posts: /reel/XXX, /p/XXX, /tv/XXX
     m = re.search(r"/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", url)
     return m.group(1) if m else None
 
@@ -588,7 +611,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
 
     clean = clean_instagram_url(url)
     if not is_instagram_media_url(clean):
-        raise ValueError("нужна ссылка Instagram: /reel/ или /p/")
+        raise ValueError("нужна ссылка Instagram: /reel/, /p/, /stories/ или /s/")
 
     # Путь 1: Instagram private API — напрямую (~0.5-2с)
     try:
