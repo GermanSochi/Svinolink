@@ -18,10 +18,11 @@ from instagram_urls import clean_instagram_url, is_instagram_media_url
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_BYTES = 52_428_800  # 50 MiB
-INSTAGRAM_REQUEST_TIMEOUT = 15
-DOWNLOAD_MAX_RETRIES = 2
-DOWNLOAD_RETRY_DELAY_SEC = 0.3
-DOWNLOAD_TOTAL_TIMEOUT_SEC = 30
+INSTAGRAM_REQUEST_TIMEOUT = 20
+DOWNLOAD_MAX_RETRIES = 1
+DOWNLOAD_RETRY_DELAY_SEC = 0.2
+DOWNLOAD_TOTAL_TIMEOUT_SEC = 90  # Render free tier — медленная сеть
+DOWNLOAD_CHUNK_SIZE = 262144  # 256KB — mejor throughput чем 64KB
 
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
@@ -339,10 +340,10 @@ def _download_via_private_api(url: str) -> Path | None:
 
         # Скачиваем видео напрямую по URL → на диск
         dest = _dest_path()
-        with requests.get(video_url, stream=True, timeout=15, headers=headers) as dl:
+        with requests.get(video_url, stream=True, timeout=30, headers=headers) as dl:
             dl.raise_for_status()
             with open(dest, "wb") as f:
-                for chunk in dl.iter_content(chunk_size=65536):
+                for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                     f.write(chunk)
 
         if dest.stat().st_size < 1024:
@@ -363,18 +364,24 @@ def _download_via_private_api(url: str) -> Path | None:
 def _ytdlp_extract_url(url: str) -> str | None:
     """Извлекает прямую ссылку на видео через yt-dlp (без скачивания)."""
     try:
+        cmd = [
+            "yt-dlp",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--no-playlist",
+            "--no-cache-dir",
+            "-j",
+            url,
+        ]
+        cookies_path = _cookies_file()
+        if cookies_path.is_file():
+            cmd.insert(1, "--cookies")
+            cmd.insert(2, str(cookies_path))
         result = subprocess.run(
-            [
-                "yt-dlp",
-                "--no-warnings",
-                "--no-check-certificates",
-                "--no-playlist",
-                "-j",
-                url,
-            ],
+            cmd,
             capture_output=True,
             text=True,
-            timeout=12,
+            timeout=20,
         )
         if result.returncode != 0:
             logger.info("yt-dlp extract failed: %s", result.stderr[:200])
@@ -397,10 +404,10 @@ def _ytdlp_extract_url(url: str) -> str | None:
 
 def _download_direct_url(direct_url: str, dest: Path) -> None:
     """Скачивает видео по прямой URL через requests."""
-    with requests.get(direct_url, stream=True, timeout=20) as resp:
+    with requests.get(direct_url, stream=True, timeout=40) as resp:
         resp.raise_for_status()
         with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=65536):
+            for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                 f.write(chunk)
 
 
@@ -422,19 +429,25 @@ def _download_ytdlp_fast(url: str) -> Path | None:
 def _download_ytdlp_fallback(url: str) -> Path:
     """Полный fallback: yt-dlp скачивает сам."""
     dest = _dest_path()
+    cmd = [
+        "yt-dlp",
+        "--no-warnings",
+        "--no-check-certificates",
+        "--no-playlist",
+        "--no-cache-dir",
+        "-f", "best[ext=mp4]/best",
+        "-o", str(dest),
+        url,
+    ]
+    cookies_path = _cookies_file()
+    if cookies_path.is_file():
+        cmd.insert(1, "--cookies")
+        cmd.insert(2, str(cookies_path))
     result = subprocess.run(
-        [
-            "yt-dlp",
-            "--no-warnings",
-            "--no-check-certificates",
-            "--no-playlist",
-            "-f", "best[ext=mp4]/best",
-            "-o", str(dest),
-            url,
-        ],
+        cmd,
         capture_output=True,
         text=True,
-        timeout=25,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {result.stderr[:200]}")
