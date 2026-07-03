@@ -130,112 +130,139 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         await message.answer(instagram_user_message())
         return
 
-    file_path = None
     clean_url: str | None = None
-    try:
-        text = message.text or message.caption or ""
-        logger.info(
-            "instagram_handler chat=%s type=%s text=%r",
-            message.chat.id,
-            message.chat.type,
-            text[:200],
+    text = message.text or message.caption or ""
+    logger.info(
+        "instagram_handler chat=%s type=%s text=%r",
+        message.chat.id,
+        message.chat.type,
+        text[:200],
+    )
+
+    store.register_chat(
+        message.chat.id,
+        title=message.chat.title,
+        chat_type=message.chat.type,
+    )
+
+    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file
+    from instagram_urls import is_instagram_media_url
+
+    clean_url = url_from_message(message)
+    if not clean_url:
+        await message.answer("🐷 Не вытащил ссылку из сообщения.")
+        return
+    if not is_instagram_media_url(clean_url):
+        await message.answer(
+            "🐷 Нужна ссылка на Reel, пост, сторис или актуальное (/reel/, /p/, /stories/, /s/)"
         )
+        return
 
-        store.register_chat(
-            message.chat.id,
-            title=message.chat.title,
-            chat_type=message.chat.type,
-        )
+    logger.info("IG clean_url=%s", clean_url)
 
-        from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file
-        from instagram_urls import is_instagram_media_url
+    _AD_TEXT = "📢 Место для вашей рекламы"
+    _AD_LINK = "https://www.tbank.ru/cf/6ZelBREhIoi"
 
-        clean_url = url_from_message(message)
-        if not clean_url:
-            raise ValueError("не удалось вытащить ссылку Instagram из сообщения")
-        if not is_instagram_media_url(clean_url):
-            raise ValueError(
-                "нужна ссылка на Reel, пост, сторис или актуальное (/reel/, /p/, /stories/, /s/)"
-            )
+    MAX_DOWNLOAD_RETRIES = 3
+    RETRY_DELAY_SEC = 5
+    last_error: Exception | None = None
 
-        logger.info("IG clean_url=%s", clean_url)
-        from instagram_download import _download_semaphore
-        async with _download_semaphore:
-            file_path, caption = await asyncio.wait_for(
-                asyncio.to_thread(download_instagram_video, clean_url),
-                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
-            )
+    for download_attempt in range(MAX_DOWNLOAD_RETRIES):
+        file_path = None
+        try:
+            from instagram_download import _download_semaphore
+            async with _download_semaphore:
+                file_path, caption = await asyncio.wait_for(
+                    asyncio.to_thread(download_instagram_video, clean_url),
+                    timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+                )
 
-        size = os.path.getsize(file_path)
-        if size > TELEGRAM_MAX_BYTES:
-            remove_file(file_path)
-            file_path = None
-            await message.answer(video_too_heavy_message(clean_url))
-            return
-
-        _AD_TEXT = "📢 Место для вашей рекламы"
-        _AD_LINK = "https://www.tbank.ru/cf/6ZelBREhIoi"
-
-        max_retries = 2
-        sent_msg = None
-        for attempt in range(max_retries):
-            try:
-                # Caption: рекламный блок
-                video_caption = f"{_AD_TEXT}\n{_AD_LINK}"
-
-                if caption.strip():
-                    sent_msg = await message.answer_video(
-                        video=FSInputFile(file_path),
-                        caption=video_caption,
-                        reply_to_message_id=message.message_id,
-                        supports_streaming=True,
-                    )
-                    cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
-                    _ig_caption_cache[cache_key] = caption
-                    if len(_ig_caption_cache) > 100:
-                        old_keys = list(_ig_caption_cache.keys())[:50]
-                        for k in old_keys:
-                            _ig_caption_cache.pop(k, None)
-                    # Кнопка 📝 наверху, реклама в caption снизу
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="📝", callback_data=f"igtxt:{cache_key}")]
-                    ])
-                    await sent_msg.edit_reply_markup(reply_markup=kb)
-                else:
-                    sent_msg = await message.answer_video(
-                        video=FSInputFile(file_path),
-                        caption=video_caption,
-                        reply_to_message_id=message.message_id,
-                        supports_streaming=True,
-                    )
-                break
-            except Exception as e:
-                if "timeout" in str(e).lower() and attempt < max_retries - 1:
-                    logger.warning(
-                        "telegram upload timeout attempt %s/%s: %s",
-                        attempt + 1,
-                        max_retries,
-                        e,
-                    )
-                    await asyncio.sleep(2)
-                    continue
-                raise
-    except asyncio.TimeoutError:
-        logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
-        bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url or '?'}")
-        await message.answer(instagram_timeout_message())
-    except Exception as e:
-        logger.error("instagram handler error: %s", e, exc_info=True)
-        bot_stats.record_error(f"IG error: {str(e)[:100]}")
-        await message.answer(map_instagram_error(e, clean_url))
-    finally:
-        if file_path is not None:
-            try:
-                from instagram_download import remove_file
-
+            size = os.path.getsize(file_path)
+            if size > TELEGRAM_MAX_BYTES:
                 remove_file(file_path)
-            except Exception:
-                pass
+                file_path = None
+                await message.answer(video_too_heavy_message(clean_url))
+                return
+
+            # Отправка в Telegram — до 2 попыток при timeout
+            sent_msg = None
+            for attempt in range(2):
+                try:
+                    video_caption = f"{_AD_TEXT}\n{_AD_LINK}"
+
+                    if caption.strip():
+                        sent_msg = await message.answer_video(
+                            video=FSInputFile(file_path),
+                            caption=video_caption,
+                            reply_to_message_id=message.message_id,
+                            supports_streaming=True,
+                        )
+                        cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
+                        _ig_caption_cache[cache_key] = caption
+                        if len(_ig_caption_cache) > 100:
+                            old_keys = list(_ig_caption_cache.keys())[:50]
+                            for k in old_keys:
+                                _ig_caption_cache.pop(k, None)
+                        kb = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📝", callback_data=f"igtxt:{cache_key}")]
+                        ])
+                        await sent_msg.edit_reply_markup(reply_markup=kb)
+                    else:
+                        sent_msg = await message.answer_video(
+                            video=FSInputFile(file_path),
+                            caption=video_caption,
+                            reply_to_message_id=message.message_id,
+                            supports_streaming=True,
+                        )
+                    break
+                except Exception as e:
+                    if "timeout" in str(e).lower() and attempt < 1:
+                        logger.warning(
+                            "telegram upload timeout attempt %s/2: %s",
+                            attempt + 1,
+                            e,
+                        )
+                        await asyncio.sleep(2)
+                        continue
+                    raise
+
+            # Успех — выходим
+            last_error = None
+            break
+
+        except asyncio.TimeoutError:
+            logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
+            last_error = RuntimeError("timeout")
+            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
+                logger.info("retry %s/%s after %ss", download_attempt + 2, MAX_DOWNLOAD_RETRIES, RETRY_DELAY_SEC)
+                await asyncio.sleep(RETRY_DELAY_SEC)
+                continue
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "instagram download attempt %s/%s failed: %s",
+                download_attempt + 1,
+                MAX_DOWNLOAD_RETRIES,
+                e,
+            )
+            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY_SEC)
+                continue
+        finally:
+            if file_path is not None:
+                try:
+                    remove_file(file_path)
+                except Exception:
+                    pass
+
+    # Все попытки исчерпаны
+    if last_error is not None:
+        if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
+            bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")
+            await message.answer(instagram_timeout_message())
+        else:
+            bot_stats.record_error(f"IG error: {str(last_error)[:100]}")
+            await message.answer(map_instagram_error(last_error, clean_url))
 
 
 async def handle_ig_text_callback(callback: CallbackQuery) -> None:
@@ -265,6 +292,10 @@ async def handle_svin_ai(message: Message, bot: Bot) -> None:
             uid,
             text[:200],
         )
+
+        # AI выключен — молча игнорируем все сообщения с тегом
+        if not settings.ai_enabled:
+            return
 
         # Управление триггерами из чата (добавить/удалить/править) — раньше списка,
         # чтобы фраза "добавь триггер" не перехватывалась "какие триггеры".
