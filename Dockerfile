@@ -4,13 +4,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl wget unzip \
   && rm -rf /var/lib/apt/lists/*
 
 # Установка xray-core для проксирования через VLESS
-RUN curl -L -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip" \
+RUN wget -q -O /tmp/xray.zip "https://ghfast.top/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip" \
+  || wget -q -O /tmp/xray.zip "https://mirror.ghproxy.com/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip" \
+  || curl -L -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip" \
   && unzip -o /tmp/xray.zip -d /usr/local/bin/ \
-  && rm /tmp/xray.zip \
+  && rm -f /tmp/xray.zip \
   && chmod +x /usr/local/bin/xray
 
 WORKDIR /app
