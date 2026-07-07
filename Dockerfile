@@ -8,7 +8,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Установка xray-core для проксирования через VLESS
-RUN curl -L -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v25.7.2/Xray-linux-64.zip" \
+RUN curl -L -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip" \
   && unzip -o /tmp/xray.zip -d /usr/local/bin/ \
   && rm /tmp/xray.zip \
   && chmod +x /usr/local/bin/xray
