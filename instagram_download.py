@@ -100,17 +100,32 @@ def _load_cookies_from_env() -> dict[str, str] | None:
 
     Поддерживает:
     - Netscape format (многострочный, с табами)
-    - Pipe-separated format: cookie1|cookie2|cookie3 (для Render UI)
+    - Pipe-separated Netscape: cookie1|cookie2|cookie3
+    - Simple key=value: sessionid=XXX|ds_user_id=YYY (самый надёжный для Render UI)
     """
     raw = os.environ.get("INSTAGRAM_COOKIES_JSON", "").strip()
     if not raw:
         return None
-    # Pipe-separated: одна строка с разделителем |
+
+    cookies: dict[str, str] = {}
+
+    # Формат 1: key=value|key=value (самый надёжный для Render)
+    if "=" in raw and "\t" not in raw:
+        for part in raw.split("|"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if k and v:
+                    cookies[k] = v
+        return cookies if cookies else None
+
+    # Формат 2: pipe-separated Netscape (табы внутри)
     if "\n" not in raw and "|" in raw:
         lines = [l.strip() for l in raw.split("|") if l.strip()]
     else:
         lines = raw.splitlines()
-    cookies: dict[str, str] = {}
+
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#"):
