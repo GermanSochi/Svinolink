@@ -45,7 +45,28 @@ INSTAGRAM_NO_CREDS_MSG = (
     "(`INSTAGRAM_PAUSED=0` на Render)."
 )
 
+_ADMIN_COOKIES_ALERT = (
+    "⚠️ **Instagram cookies протухли!**\n\n"
+    "Пользователь попытался скачать видео, но сессия истекла.\n"
+    "🔧 Обнови `INSTAGRAM_COOKIES_JSON` на Render."
+)
+
 _client = None
+_last_admin_alert_ts: float = 0  # чтобы не спамить
+
+
+async def _notify_admin_cookies_expired(bot) -> None:
+    """Отправляет уведомление админу один раз в час при протухании cookies."""
+    global _last_admin_alert_ts
+    now = time.time()
+    if now - _last_admin_alert_ts < 3600:
+        return
+    _last_admin_alert_ts = now
+    try:
+        for admin_id in settings.admin_ids:
+            await bot.send_message(admin_id, _ADMIN_COOKIES_ALERT, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("Failed to notify admin about expired cookies: %s", exc)
 _client_lock = Lock()
 _ready = False
 _cookies_loaded = False

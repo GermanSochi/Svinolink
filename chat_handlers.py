@@ -263,6 +263,11 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         else:
             bot_stats.record_error(f"IG error: {str(last_error)[:100]}")
             await message.answer(map_instagram_error(last_error, clean_url))
+            # Уведомляем админа при протухании cookies
+            error_text = str(last_error).lower()
+            if "cookie" in error_text or "сессия" in error_text or "login" in error_text:
+                from instagram_download import _notify_admin_cookies_expired
+                await _notify_admin_cookies_expired(bot)
 
 
 async def handle_ig_text_callback(callback: CallbackQuery) -> None:
