@@ -165,7 +165,17 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             init_instagram_downloader()
             with suppress(Exception):
                 await init_game_db()
-            await bot.delete_webhook(drop_pending_updates=True)
+            # Агрессивная очистка webhook — если он остался от Render/другого инстанса
+            for attempt in range(3):
+                try:
+                    info = await bot.get_webhook_info()
+                    if info.url:
+                        logger.warning("Webhook active (%s), deleting (attempt %d)", info.url, attempt + 1)
+                        await bot.delete_webhook(drop_pending_updates=True)
+                    break
+                except Exception as exc:
+                    logger.warning("delete_webhook attempt %d failed: %s", attempt + 1, exc)
+                    await asyncio.sleep(1)
             await configure_bot(bot)
             app["style_task"] = asyncio.create_task(daily_style_loop())
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
@@ -211,16 +221,59 @@ async def _self_ping_loop(port: int) -> None:
 
 
 async def run_polling_with_http(bot: Bot, dp: Dispatcher) -> None:
+    # Тройная страховка: удалить webhook ДО запуска HTTP и polling
+    for attempt in range(3):
+        try:
+            info = await bot.get_webhook_info()
+            if info.url:
+                logger.warning(
+                    "Pre-polling: webhook active at %s (attempt %d), removing",
+                    info.url, attempt + 1,
+                )
+                await bot.delete_webhook(drop_pending_updates=True)
+                # Проверяем что действительно удалился
+                info2 = await bot.get_webhook_info()
+                if not info2.url:
+                    logger.info("Webhook removed successfully")
+                    break
+            else:
+                logger.info("Pre-polling: no webhook active — OK")
+                break
+        except Exception as exc:
+            logger.warning("Pre-polling webhook cleanup attempt %d failed: %s", attempt + 1, exc)
+            await asyncio.sleep(1)
+
     app = build_app(bot, dp, webhook=False)
     me = await bot.get_me()
     logger.info("Polling @%s on port %s", me.username, settings.port)
 
     async def poll() -> None:
-        await dp.start_polling(
-            bot,
-            drop_pending_updates=True,
-            allowed_updates=["message", "callback_query", "my_chat_member"],
-        )
+        # Периодическая проверка webhook каждые 5 минут
+        async def _watchdog():
+            while True:
+                await asyncio.sleep(300)
+                try:
+                    info = await bot.get_webhook_info()
+                    if info.url:
+                        logger.error(
+                            "WATCHDOG: webhook reappeared at %s during polling! Removing.",
+                            info.url,
+                        )
+                        await bot.delete_webhook(drop_pending_updates=True)
+                except Exception as exc:
+                    logger.warning("watchdog webhook check failed: %s", exc)
+
+        watchdog = asyncio.create_task(_watchdog())
+        try:
+            await dp.start_polling(
+                bot,
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query", "my_chat_member"],
+            )
+        finally:
+            watchdog.cancel()
+            with suppress(asyncio.CancelledError):
+                await watchdog
 
     poll_task = asyncio.create_task(poll())
     try:

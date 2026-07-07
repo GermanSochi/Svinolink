@@ -16,6 +16,6 @@ COPY . /app
 RUN mkdir -p /app/downloads /app/data
 
 ENV DOWNLOADS_DIR=/app/downloads \
-    PORT=8080
+    PORT=10000
 CMD ["python", "main.py"]
 
