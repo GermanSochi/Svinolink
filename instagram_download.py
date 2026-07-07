@@ -25,6 +25,10 @@ DOWNLOAD_RETRY_DELAY_SEC = 0.2
 DOWNLOAD_TOTAL_TIMEOUT_SEC = 90  # Render free tier — медленная сеть
 DOWNLOAD_CHUNK_SIZE = 262144  # 256KB — mejor throughput чем 64KB
 
+# --- SOCKS5 proxy (xray local) ---
+PROXY_URL = os.environ.get("PROXY_URL", "socks5h://127.0.0.1:10808")
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if os.environ.get("PROXY_ENABLED") == "1" else None
+
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
     "Требуются прокси или cookies."
@@ -388,7 +392,7 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
     }
 
     try:
-        resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=10)
+        resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=10, proxies=PROXIES)
         if resp.status_code != 200:
             logger.info("private API %s returned %s", media_id, resp.status_code)
             return None
@@ -420,7 +424,7 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
 
         # Скачиваем видео напрямую по URL → на диск
         dest = _dest_path()
-        with requests.get(video_url, stream=True, timeout=30, headers=headers) as dl:
+        with requests.get(video_url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
             dl.raise_for_status()
             with open(dest, "wb") as f:
                 for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
@@ -453,6 +457,8 @@ def _ytdlp_extract_url(url: str) -> str | None:
             "-j",
             url,
         ]
+        if PROXIES:
+            cmd.extend(["--proxy", PROXY_URL])
         cookies_path = _cookies_file()
         if cookies_path.is_file():
             cmd.insert(1, "--cookies")
@@ -484,7 +490,7 @@ def _ytdlp_extract_url(url: str) -> str | None:
 
 def _download_direct_url(direct_url: str, dest: Path) -> None:
     """Скачивает видео по прямой URL через requests."""
-    with requests.get(direct_url, stream=True, timeout=40) as resp:
+    with requests.get(direct_url, stream=True, timeout=40, proxies=PROXIES) as resp:
         resp.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
@@ -519,6 +525,8 @@ def _download_ytdlp_fallback(url: str) -> Path:
         "-o", str(dest),
         url,
     ]
+    if PROXIES:
+        cmd.extend(["--proxy", PROXY_URL])
     cookies_path = _cookies_file()
     if cookies_path.is_file():
         cmd.insert(1, "--cookies")

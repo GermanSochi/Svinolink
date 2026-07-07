@@ -1,0 +1,40 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": true }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [{
+          "address": "in.telegasochi.ru",
+          "port": 48138,
+          "users": [{
+            "encryption": "none",
+            "flow": "xtls-rprx-vision",
+            "id": "262b5ab2-751f-4c82-aa6e-5fc6eab8aad3",
+            "security": "auto"
+          }]
+        }]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "fingerprint": "firefox",
+          "publicKey": "huizXiAO1dJZs-l6ThLaIUfDeU63DeSD05Aw9FoJQXU",
+          "serverName": "www.icloud.com",
+          "shortId": "d1",
+          "spiderX": "/"
+        },
+        "tcpSettings": { "header": { "type": "none" } }
+      }
+    }
+  ]
+}

@@ -42,3 +42,7 @@ services:
         value: /app/downloads
       - key: PORT
         value: "10000"
+      - key: PROXY_ENABLED
+        value: "1"
+      - key: PROXY_URL
+        value: socks5h://127.0.0.1:10808

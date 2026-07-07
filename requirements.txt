@@ -18,3 +18,4 @@ chromadb>=0.6.0
 faiss-cpu>=1.14.0
 SQLAlchemy>=2.0
 aiosqlite>=0.20
+PySocks>=1.7.1
