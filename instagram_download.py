@@ -96,12 +96,22 @@ def _parse_netscape_cookie_dict(path: Path) -> dict[str, str]:
 
 
 def _load_cookies_from_env() -> dict[str, str] | None:
-    """Загружает cookies из env INSTAGRAM_COOKIES_JSON (Netscape-табличный текст)."""
+    """Загружает cookies из env INSTAGRAM_COOKIES_JSON.
+
+    Поддерживает:
+    - Netscape format (многострочный, с табами)
+    - Pipe-separated format: cookie1|cookie2|cookie3 (для Render UI)
+    """
     raw = os.environ.get("INSTAGRAM_COOKIES_JSON", "").strip()
     if not raw:
         return None
+    # Pipe-separated: одна строка с разделителем |
+    if "\n" not in raw and "|" in raw:
+        lines = [l.strip() for l in raw.split("|") if l.strip()]
+    else:
+        lines = raw.splitlines()
     cookies: dict[str, str] = {}
-    for line in raw.splitlines():
+    for line in lines:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
