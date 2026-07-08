@@ -161,7 +161,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
     logger.info("IG clean_url=%s", clean_url)
 
     _AD_TEXT = "💰 Донаты приветствуются"
-    _AD_LINK = "https://finance.ozon.ru/apps/sbp/ozonbankpay/019f3777-de1d-7d25-b88b-bd3827c63a7d"
+    _AD_LINK = "https://clck.ru/3UaRGo"
 
     MAX_DOWNLOAD_RETRIES = 3
     RETRY_DELAY_SEC = 5
