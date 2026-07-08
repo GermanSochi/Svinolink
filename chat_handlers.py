@@ -160,8 +160,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     logger.info("IG clean_url=%s", clean_url)
 
-    _AD_TEXT = "📢 Место для вашей рекламы"
-    _AD_LINK = "https://www.tbank.ru/cf/6ZelBREhIoi"
+    _AD_TEXT = "💰 Донаты приветствуются"
+    _AD_LINK = "https://finance.ozon.ru/apps/sbp/ozonbankpay/019f3777-de1d-7d25-b88b-bd3827c63a7d"
 
     MAX_DOWNLOAD_RETRIES = 3
     RETRY_DELAY_SEC = 5
@@ -257,17 +257,19 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     # Все попытки исчерпаны
     if last_error is not None:
+        error_text = str(last_error).lower()
+        # Уведомляем админа при протухании cookies
+        if "cookie" in error_text or "сессия" in error_text or "login" in error_text:
+            from instagram_download import _notify_admin_cookies_expired
+            await _notify_admin_cookies_expired(bot)
+            # Молча выходим — не спамим пользователя
+            return
         if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
             bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")
             await message.answer(instagram_timeout_message())
         else:
             bot_stats.record_error(f"IG error: {str(last_error)[:100]}")
             await message.answer(map_instagram_error(last_error, clean_url))
-            # Уведомляем админа при протухании cookies
-            error_text = str(last_error).lower()
-            if "cookie" in error_text or "сессия" in error_text or "login" in error_text:
-                from instagram_download import _notify_admin_cookies_expired
-                await _notify_admin_cookies_expired(bot)
 
 
 async def handle_ig_text_callback(callback: CallbackQuery) -> None:
