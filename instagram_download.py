@@ -373,16 +373,12 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
     Самый быстрый метод (~0.5-2с на скачивание).
     Возвращает (path, caption).
     """
-    shortcode = _extract_shortcode(url)
-    if not shortcode:
-        return None
+    import re
+    from urllib.parse import urlparse, parse_qs
 
     cookies = _load_cookies_dict()
     if not cookies.get("sessionid"):
         return None
-
-    media_id = _shortcode_to_media_id(shortcode)
-    api_url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
 
     headers = {
         "User-Agent": "Instagram 275.0.0.27.98 Android",
@@ -390,6 +386,34 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
         "Accept": "*/*",
         "Accept-Language": "en-US",
     }
+
+    # Определяем тип контента: Stories используют numeric ID напрямую
+    is_story = "/stories/" in url or "/s/" in url
+    if is_story:
+        # Stories: /stories/username/3935441032632448198
+        m = re.search(r"/stories/[^/]+/(\d+)", url)
+        if m:
+            story_id = m.group(1)
+        else:
+            # Highlights: /s/XXX?story_media_id=XXX
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            story_id = qs.get("story_media_id", [None])[0]
+            if not story_id:
+                m = re.search(r"/s/(\d+)", url)
+                story_id = m.group(1) if m else None
+        if not story_id:
+            return None
+        # Stories требуют другой эндпоинт
+        api_url = f"https://i.instagram.com/api/v1/media/{story_id}/info/"
+        shortcode = story_id
+    else:
+        # Reels/Posts: используем shortcode → media_id
+        shortcode = _extract_shortcode(url)
+        if not shortcode:
+            return None
+        media_id = _shortcode_to_media_id(shortcode)
+        api_url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
 
     try:
         resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=10, proxies=PROXIES)
