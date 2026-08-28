@@ -38,6 +38,12 @@ services:
         value: "0"
       - key: SKILLS_TOOLS_ENABLED
         value: "0"
+      - key: WATCH_FEEDER_ENABLED
+        value: "0"
+      - key: WATCH_FEEDER_CHAT_IDS
+        sync: false
+      - key: WATCH_FEEDER_INTERVAL_HOURS
+        value: "6"
       - key: DOWNLOADS_DIR
         value: /app/downloads
       - key: PORT

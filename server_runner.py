@@ -15,6 +15,7 @@ from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
 from chat_style import daily_style_loop
+from watch_feeder import watch_feed_loop
 from config import settings
 from instagram_download import init_instagram_downloader
 from game_init import init_game_db
@@ -143,11 +144,13 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
             app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
             app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
+            app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
+            app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
             logger.info("Listening POST %s | Mini App %s | self-ping every %ss",
                         route, settings.miniapp_url or "off", SELF_PING_INTERVAL)
 
         async def on_shutdown(app: web.Application) -> None:
-            for key in ("style_task", "keepalive_task"):
+            for key in ("style_task", "keepalive_task", "watch_feed_task"):
                 task = app.get(key)
                 if task:
                     task.cancel()
@@ -181,6 +184,8 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
             app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
             app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
+            app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
+            app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
             logger.info("Polling mode | Mini App %s | self-ping every %ss",
                         settings.miniapp_url or "off", SELF_PING_INTERVAL)
 

@@ -291,6 +291,15 @@ def instagram_user_message() -> str:
     return INSTAGRAM_NO_CREDS_MSG
 
 
+def instagram_is_active_check() -> bool:
+    """Проверка: Instagram доступен для запросов (не на паузе, есть cookies)."""
+    if settings.instagram_paused:
+        return False
+    if _cookies_loaded or (_client is not None and _client.user_id is not None):
+        return True
+    return settings.instagram_is_active()
+
+
 def init_instagram_downloader() -> None:
     """Вызов при старте приложения (Render on_startup)."""
     scrub_instagram_secrets()

@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     memory_enabled: bool = Field(default=False, alias="MEMORY_ENABLED")
     skills_tools_enabled: bool = Field(default=False, alias="SKILLS_TOOLS_ENABLED")
 
+    # --- Watch Feeder: автопостинг часов из Instagram ---
+    watch_feeder_enabled: bool = Field(default=False, alias="WATCH_FEEDER_ENABLED")
+    watch_feeder_chat_ids_raw: str = Field(default="", alias="WATCH_FEEDER_CHAT_IDS")
+    watch_feeder_interval_hours: int = Field(default=6, alias="WATCH_FEEDER_INTERVAL_HOURS")
+
     @field_validator("instagram_paused", mode="before")
     @classmethod
     def parse_instagram_paused(cls, v: object) -> bool:
@@ -97,6 +102,15 @@ class Settings(BaseSettings):
             if part.isdigit():
                 out.add(int(part))
         self._admin_ids_cache = out
+        return out
+
+    @property
+    def watch_feeder_chat_ids(self) -> list[int]:
+        out: list[int] = []
+        for part in self.watch_feeder_chat_ids_raw.split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                out.append(int(part))
         return out
 
     @property
