@@ -185,12 +185,17 @@ async def cmd_wf_run(message: Message) -> None:
             items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
             source = f"🌐 DuckDuckGo: нашёл {len(results)}, добавил {added} новых"
         except asyncio.TimeoutError:
-            await message.answer("⏰ Поиск занял слишком много времени")
-            return
+            results = []
         except Exception as exc:
             logger.error("wf_run discovery failed: %s", exc, exc_info=True)
-            await message.answer(f"❌ DuckDuckGo: {exc}")
-            return
+            results = []
+
+        if not results:
+            # Fallback: built-in seed
+            from watch_feeder import _seed_cache_if_empty
+            seeded = _seed_cache_if_empty()
+            items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
+            source = f"📦 Built-in seed: {seeded} reels, кэш {len(_load_candidates())}"
 
     if not items:
         await message.answer("❌ Нет кандидатов")
@@ -393,15 +398,21 @@ async def cmd_wf_go(message: Message) -> None:
             timeout=45,
         )
     except asyncio.TimeoutError:
-        await message.answer("⏰ Поиск занял слишком много времени, попробуй позже")
-        return
+        results = []
     except Exception as exc:
-        await message.answer(f"❌ DuckDuckGo: {exc}")
-        return
+        logger.warning("wf_go: DDG failed: %s", exc)
+        results = []
 
     if not results:
-        await message.answer("❌ Ничего не нашёл")
-        return
+        # Fallback: use built-in seed
+        from watch_feeder import _seed_cache_if_empty, _load_candidates
+        _seed_cache_if_empty()
+        results = _load_candidates()
+        if results:
+            await message.answer(f"📦 DDG недоступен, взял из built-in ({len(results)} шт)")
+        else:
+            await message.answer("❌ Ничего не нашёл")
+            return
 
     posted = _load_posted()
     fresh = [r for r in results if r["shortcode"] not in posted]

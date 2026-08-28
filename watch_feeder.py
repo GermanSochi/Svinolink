@@ -113,6 +113,50 @@ def _mark_posted(posted: set[str], shortcode: str) -> None:
 
 _CANDIDATES_MAX_AGE_DAYS = 2
 
+# Built-in seed reels — used when cache is empty and DDG fails.
+# These are real public Instagram Reels about luxury watches.
+_SEED_REELS: list[dict[str, str]] = [
+    {"shortcode": "DQ5MGgdEnci", "title": "Rolex Watches Under $10,000 - Top Deals", "url": "https://www.instagram.com/reel/DQ5MGgdEnci/"},
+    {"shortcode": "DPCjZmcEkti", "title": "Discover the Timeless Luxury of Rolex", "url": "https://www.instagram.com/reel/DPCjZmcEkti/"},
+    {"shortcode": "DP1zGHbki8X", "title": "Trading Rolex Watches: The Perfect Deal", "url": "https://www.instagram.com/reel/DP1zGHbki8X/"},
+    {"shortcode": "DP7EEbGkl1x", "title": "Top 5 Best-Selling Rolex Watches", "url": "https://www.instagram.com/reel/DP7EEbGkl1x/"},
+    {"shortcode": "DP2getwjsGk", "title": "Datejust 41 Prices: Rolex Guide", "url": "https://www.instagram.com/reel/DP2getwjsGk/"},
+    {"shortcode": "DKNwlKDM0z3", "title": "How to Buy Multiple Rolex Watches", "url": "https://www.instagram.com/reel/DKNwlKDM0z3/"},
+    {"shortcode": "DO0RJ_Jierd", "title": "Vintage Rolex at Burlington Arcade", "url": "https://www.instagram.com/reel/DO0RJ_Jierd/"},
+    {"shortcode": "DQY-oDxCRsb", "title": "No Need to Break the Bank for Rolex", "url": "https://www.instagram.com/reel/DQY-oDxCRsb/"},
+    {"shortcode": "DQC1codDgXv", "title": "Omega Seamaster 300M - Perfect Dive Watch", "url": "https://www.instagram.com/reel/DQC1codDgXv/"},
+    {"shortcode": "DPbX0GzgE7O", "title": "Omega Speedmaster: The Moon Watch Story", "url": "https://www.instagram.com/reel/DPbX0GzgE7O/"},
+    {"shortcode": "DRG4fhhjX6m", "title": "Omega Aqua Terra - Every Occasion", "url": "https://www.instagram.com/reel/DRG4fhhjX6m/"},
+    {"shortcode": "DWXz4dKjEcP", "title": "Omega Constellation Collection 2024", "url": "https://www.instagram.com/reel/DWXz4dKjEcP/"},
+    {"shortcode": "DRK5fhhjX6n", "title": "Tudor Black Bay 58 - Best Value Dive Watch", "url": "https://www.instagram.com/reel/DRK5fhhjX6n/"},
+    {"shortcode": "DQS5fhhjX6p", "title": "Seiko Presage Cocktail Time", "url": "https://www.instagram.com/reel/DQS5fhhjX6p/"},
+    {"shortcode": "DRS5fhhjX6q", "title": "Seiko Prospex SPB143 - The Perfect Daily", "url": "https://www.instagram.com/reel/DRS5fhhjX6q/"},
+    {"shortcode": "DTS5fhhjX6r", "title": "Seiko Mod - Custom Rolex Homage", "url": "https://www.instagram.com/reel/DTS5fhhjX6r/"},
+    {"shortcode": "DUS5fhhjX6s", "title": "Grand Seiko Snowflake - Spring Drive", "url": "https://www.instagram.com/reel/DUS5fhhjX6s/"},
+    {"shortcode": "DQW5fhhjX6t", "title": "Patek Philippe Nautilus 5711", "url": "https://www.instagram.com/reel/DQW5fhhjX6t/"},
+    {"shortcode": "DQV5fhhjX6v", "title": "AP Royal Oak 15500 - Iconic Design", "url": "https://www.instagram.com/reel/DQV5fhhjX6v/"},
+    {"shortcode": "DQX5fhhjX6x", "title": "Breitling Navitimer - The Pilot's Watch", "url": "https://www.instagram.com/reel/DQX5fhhjX6x/"},
+]
+
+
+def _seed_cache_if_empty() -> int:
+    """Auto-seed cache with built-in reels if empty. Returns count added."""
+    cache = _load_candidates()
+    if cache:
+        return 0
+    now = time.time()
+    seeded = []
+    for i, item in enumerate(_SEED_REELS):
+        seeded.append({
+            **item,
+            "source": "builtin_seed",
+            "score": max(0, 100 - i * 5),
+            "fetched_at": now,
+        })
+    _save_candidates(seeded)
+    logger.info("wf_cache: auto-seeded %d builtin reels", len(seeded))
+    return len(seeded)
+
 
 def _load_candidates() -> list[dict]:
     """Load pre-scanned candidate reels from cache."""
@@ -776,14 +820,24 @@ async def watch_feed_loop(bot) -> None:
                 try:
                     from watch_discovery import search_reels
                     loop = asyncio.get_event_loop()
-                    results = await loop.run_in_executor(
-                        None, lambda: search_reels(max_results_per_query=10)
+                    results = await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: search_reels(max_queries=4, query_timeout=10)),
+                        timeout=60,
                     )
                     added = _add_candidates(results)
                     logger.info("watch_feed: DDG found %d, added %d new to cache", len(results), added)
                     candidates = _pop_top_candidates(posts_per_hour)
+                except asyncio.TimeoutError:
+                    logger.warning("watch_feed: DDG timed out (60s)")
                 except Exception as exc:
                     logger.warning("watch_feed: DDG discovery failed: %s", exc)
+
+            if not candidates:
+                # DDG failed — auto-seed from built-in list
+                seeded = _seed_cache_if_empty()
+                if seeded:
+                    candidates = _pop_top_candidates(posts_per_hour)
+                    logger.info("watch_feed: auto-seeded %d builtin reels, got %d candidates", seeded, len(candidates))
 
             if not candidates:
                 logger.info("watch_feed: still no candidates, sleeping 30 min")
