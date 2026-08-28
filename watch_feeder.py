@@ -375,6 +375,7 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
     posted = _load_posted()
     accounts = _load_accounts()
     candidates = []
+    seen: set[str] = set()
     cl = _get_client()
 
     for username in accounts:
@@ -387,7 +388,7 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
 
         for m in medias:
             sc = getattr(m, "code", "") or ""
-            if not sc or sc in posted:
+            if not sc or sc in posted or sc in seen:
                 continue
             if getattr(m, "media_type", 0) not in (2, 8):
                 continue
@@ -404,6 +405,7 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
                 "views": int(views),
                 "score": score,
             })
+            seen.add(sc)
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     logger.info("watch_feed: %d candidates from %d accounts", len(candidates), len(accounts))
