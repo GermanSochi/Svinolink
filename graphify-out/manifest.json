@@ -1,0 +1,382 @@
+{
+  "C:\\Claude\\Svinolink\\admin_auth.py": {
+    "mtime": 1780000554.590018,
+    "ast_hash": "2dd12701bf975cc154d2183bbc1792bb",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\admin_panel.py": {
+    "mtime": 1780000610.8201535,
+    "ast_hash": "9e5a48a1c3452f937f7d6139f5b9050a",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\ai_quota.py": {
+    "mtime": 1779878039.3372056,
+    "ast_hash": "b1e83f44bda5344769ceba04a24e01e6",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\bot_messages.py": {
+    "mtime": 1780007171.0485804,
+    "ast_hash": "c87ddc5ae23bcc35d7ded204d326b3d5",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\bot_miniapp.py": {
+    "mtime": 1779814562.8712533,
+    "ast_hash": "7cf175f25c45bcf48315c18df88c66ab",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\bot_startup.py": {
+    "mtime": 1779878355.6654425,
+    "ast_hash": "3935e8ab4aa05e47ef9e953b3d83e225",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\capabilities.py": {
+    "mtime": 1780008131.7811146,
+    "ast_hash": "bce29d26a5477c6225570c4507396c65",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_examples.py": {
+    "mtime": 1779999727.5964625,
+    "ast_hash": "edae3bc240e4fa2db827f6904264e9f5",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_handlers.py": {
+    "mtime": 1780070318.9208927,
+    "ast_hash": "ccdd61f49198deee46eace12a16a5099",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_memory.py": {
+    "mtime": 1780000521.95295,
+    "ast_hash": "f138459245fe6c690e0738360ddf3f34",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_personality.py": {
+    "mtime": 1780011440.2553976,
+    "ast_hash": "a40e37f3e1918205a6acdb8edc88a350",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_queries.py": {
+    "mtime": 1780000592.506189,
+    "ast_hash": "f32a3765010a9599a5893108390ffd77",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_query_models.py": {
+    "mtime": 1780001006.7229083,
+    "ast_hash": "79f3ca97bdba81d359cc4f1a31fd929e",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_roster.py": {
+    "mtime": 1780002277.8932471,
+    "ast_hash": "7ada17e506e0fbaf52ae940ce124abea",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_style.py": {
+    "mtime": 1779998411.5735304,
+    "ast_hash": "0162e9a6790caeb68ac38bb8c4dd398c",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_time.py": {
+    "mtime": 1779999683.5528579,
+    "ast_hash": "ccbd34ba6f8aede2e6ddf3ac477e1ab5",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\chat_user_log.py": {
+    "mtime": 1780000610.3853774,
+    "ast_hash": "45157d498357c221b976fb7ec177d358",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\check_supabase.py": {
+    "mtime": 1779825811.0026505,
+    "ast_hash": "7b17fa896bae089c086de5605ec9768f",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\config.py": {
+    "mtime": 1780070303.2295153,
+    "ast_hash": "f662cbed0edd09ae0c75411092fb1495",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\deps.py": {
+    "mtime": 1779808938.829212,
+    "ast_hash": "1b8a605ce1c3c07ac0b585ee82c781b2",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\doc_extract.py": {
+    "mtime": 1779998411.5745306,
+    "ast_hash": "927e3e7ba9dabc83ce512d2c16d8b663",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\downloader.py": {
+    "mtime": 1779812706.5465133,
+    "ast_hash": "d931cb75b8ca2a781da20bfaeff6ac8d",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\game_db.py": {
+    "mtime": 1779998411.5755296,
+    "ast_hash": "2b9c1de2d6bff00f803bfb7f54b920e5",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\game_init.py": {
+    "mtime": 1779998411.5755296,
+    "ast_hash": "02e220c3be9c492e7c6aad2a6dc941c8",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\game_models.py": {
+    "mtime": 1779998411.5765278,
+    "ast_hash": "8a973bd6ef9357c45e531f75ce4340c6",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\game_store.py": {
+    "mtime": 1779809229.8759906,
+    "ast_hash": "289e27c4ddab591bc04c548966a368ae",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\instagram_download.py": {
+    "mtime": 1780070318.2447007,
+    "ast_hash": "36593cea098d62448b8ba9e12249ff3b",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\instagram_urls.py": {
+    "mtime": 1779812460.9008417,
+    "ast_hash": "52b45efaffc808f8ca4baf8521b0315a",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\main.py": {
+    "mtime": 1779998411.5795314,
+    "ast_hash": "97217ddb9cfffbab2c00d19aad2c62db",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\media_requests.py": {
+    "mtime": 1779998411.5805283,
+    "ast_hash": "fafdf347302bd4f10ed690024a56df45",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\media_tools.py": {
+    "mtime": 1779998411.5815287,
+    "ast_hash": "2ed017a5077c186c9c1a8e0c2723a55a",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\memory_handlers.py": {
+    "mtime": 1780007173.127619,
+    "ast_hash": "398bb079a7415b31b535ecbaf48c8291",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\message_urls.py": {
+    "mtime": 1779812471.9970248,
+    "ast_hash": "5cdb05a7992ddee3b1f97ab093950610",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\middleware_log.py": {
+    "mtime": 1779825841.3715641,
+    "ast_hash": "4853520a6f3bfd5fcf85f280273ae85d",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\miniapp_auth.py": {
+    "mtime": 1779814808.3315933,
+    "ast_hash": "9561ee5e2d7a09bb064a50d4c55fb22b",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\personality_commands.py": {
+    "mtime": 1780011443.053817,
+    "ast_hash": "0e8862a7810dd47f6a60087898ea49f6",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\riddle_ai.py": {
+    "mtime": 1779810758.1018426,
+    "ast_hash": "bb3cbc4060e0ac492244a41f8c3642e7",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\server_runner.py": {
+    "mtime": 1780070322.6629548,
+    "ast_hash": "463bc03e2ed491f9caeb20e15b1e648c",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\skills_tools.py": {
+    "mtime": 1779882964.353539,
+    "ast_hash": "2db8d56654ac751de1661fd4798070e1",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\store.py": {
+    "mtime": 1779998411.58353,
+    "ast_hash": "27d79838a36d3b5fcf8e0bcb080046ab",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\svin_system_prompt.py": {
+    "mtime": 1780002281.6397362,
+    "ast_hash": "fb05135ebfbd61cd5b6aa76b23e39f2a",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\telegram_format.py": {
+    "mtime": 1780009030.4488955,
+    "ast_hash": "37f1ebbd952f0f3a77bc56da4bfc0e48",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\triggers.json": {
+    "mtime": 1779807502.1174903,
+    "ast_hash": "f16dbf33eec6792532506dde2d06483c",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\trigger_ai.py": {
+    "mtime": 1779808920.8979566,
+    "ast_hash": "c897b8caac0c081452c88806603b661f",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\trigger_fsm.py": {
+    "mtime": 1779817069.8695302,
+    "ast_hash": "8361a172175bff1777dc0dd45877d8d7",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\trigger_manage_requests.py": {
+    "mtime": 1779998411.5845287,
+    "ast_hash": "73cb3c58e453774eeb6cbfe73c6abe16",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\trigger_queries.py": {
+    "mtime": 1779879409.3247201,
+    "ast_hash": "f33c1cde319a529951d74fa90cf8679a",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\trigger_supabase.py": {
+    "mtime": 1779878321.5387447,
+    "ast_hash": "35e40200d1a94212a706a092f33040e6",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\webapp_server.py": {
+    "mtime": 1779817761.3900716,
+    "ast_hash": "9667a6975bd1a415a688b57e7af40231",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\web_search.py": {
+    "mtime": 1780011438.5427735,
+    "ast_hash": "2926610c4b7b24a4c424053e5ed83013",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\web_search_handlers.py": {
+    "mtime": 1780009746.4685397,
+    "ast_hash": "f5dc948f069b43989402faf5804e9bc1",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\web_search_synthesis.py": {
+    "mtime": 1780011450.4060962,
+    "ast_hash": "ef6d78cf3dcba82eb23d287b0b6b2c65",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\yandex_gpt.py": {
+    "mtime": 1780007143.6734376,
+    "ast_hash": "4ca18008c0f7532e14fbbf3f4ede239e",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\yandex_router.py": {
+    "mtime": 1779998411.5855296,
+    "ast_hash": "5ba7328311aa0f3d537c929643b5d9bf",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\economy.py": {
+    "mtime": 1779998411.5775309,
+    "ast_hash": "31e413e57b30a81fad7bad4a46aac1cf",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\engine.py": {
+    "mtime": 1779998411.5775309,
+    "ast_hash": "5dd3cd5ca0b9d55fc0ade8d472297a3d",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\fishing.py": {
+    "mtime": 1779998411.5775309,
+    "ast_hash": "cfadb11cbb156bd4a5066bb795e13d59",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\poker.py": {
+    "mtime": 1779998411.5785277,
+    "ast_hash": "047204461757a2cbedfa7697958c8c32",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\prompts.py": {
+    "mtime": 1779998411.5785277,
+    "ast_hash": "411bcbf7932374bcb9d7eb5903c38269",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\quiz.py": {
+    "mtime": 1779998411.5785277,
+    "ast_hash": "96ceead74507ce197c1dfb3a2a313e56",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\responses.py": {
+    "mtime": 1779998411.5795314,
+    "ast_hash": "644eea9447369dcf3d7faef49a986681",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\games\\__init__.py": {
+    "mtime": 1779998411.5765278,
+    "ast_hash": "74cd860b1e619e008a4f8a687b7dea99",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\scripts\\set_avatar.py": {
+    "mtime": 1779809049.001828,
+    "ast_hash": "a52efa958c07dc90e31e1e1754d5f065",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\scripts\\set_webhook.py": {
+    "mtime": 1779810429.7779183,
+    "ast_hash": "2156d71bd183033a42540063def4e8f3",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\sql\\chat_history.sql": {
+    "mtime": 1779821196.248785,
+    "ast_hash": "d121e5b5c411e3911fb869a935d57379",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\sql\\chat_style.sql": {
+    "mtime": 1779880635.3314195,
+    "ast_hash": "9e74036ea14307c2150d7d1e8518c5e3",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\sql\\chat_triggers.sql": {
+    "mtime": 1779878352.4477088,
+    "ast_hash": "6155a72eaea9fa19a0fa14aece8c0595",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\CHECKPOINT.md": {
+    "mtime": 1779821145.9133282,
+    "ast_hash": "5517be602c79a2057e1a02e6bfce0610",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\PAUSE.md": {
+    "mtime": 1780070326.7005053,
+    "ast_hash": "d16cba46cc5f7f248c13c6af5ff4f0bd",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\PERSONALITY_TEST.md": {
+    "mtime": 1780011446.608403,
+    "ast_hash": "53d8e301cdd3461ba00b9d84d719a301",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\README.md": {
+    "mtime": 1779810768.0814607,
+    "ast_hash": "5708d00b232239ab67d8eacf03acf533",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\render.yaml": {
+    "mtime": 1780070328.1464272,
+    "ast_hash": "882f70cfb25f01e44bb4dac3e5797d99",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\requirements.txt": {
+    "mtime": 1780006355.785593,
+    "ast_hash": "ae3ee583c0e2ba8067e598fc67f33f10",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\.github\\workflows\\wake-render.yml": {
+    "mtime": 1779998411.5685267,
+    "ast_hash": "8665a45b68b2058d8c0de0da3583b9c1",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\static\\miniapp\\index.html": {
+    "mtime": 1779817781.8688395,
+    "ast_hash": "5aa4b18a405cec70a87b2a65179d2a04",
+    "semantic_hash": ""
+  },
+  "C:\\Claude\\Svinolink\\assets\\avatar.png": {
+    "mtime": 1779809026.4323516,
+    "ast_hash": "257507c7da440f5b31145199448c3b75",
+    "semantic_hash": ""
+  }
+}

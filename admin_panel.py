@@ -175,12 +175,18 @@ async def cmd_wf_run(message: Message) -> None:
         await message.answer("🔍 Кэш пуст, ищу через DuckDuckGo…")
         try:
             from watch_discovery import search_reels
-            results = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: search_reels(max_results_per_query=10)
+            results = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, lambda: search_reels(max_queries=4, query_timeout=10)
+                ),
+                timeout=60,
             )
             added = _add_candidates(results)
             items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
             source = f"🌐 DuckDuckGo: нашёл {len(results)}, добавил {added} новых"
+        except asyncio.TimeoutError:
+            await message.answer("⏰ Поиск занял слишком много времени")
+            return
         except Exception as exc:
             logger.error("wf_run discovery failed: %s", exc, exc_info=True)
             await message.answer(f"❌ DuckDuckGo: {exc}")
@@ -382,9 +388,13 @@ async def cmd_wf_go(message: Message) -> None:
     try:
         from watch_discovery import search_reels
         loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(
-            None, lambda: search_reels(max_results_per_query=5)
+        results = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: search_reels(max_queries=3, query_timeout=10)),
+            timeout=45,
         )
+    except asyncio.TimeoutError:
+        await message.answer("⏰ Поиск занял слишком много времени, попробуй позже")
+        return
     except Exception as exc:
         await message.answer(f"❌ DuckDuckGo: {exc}")
         return

@@ -20,32 +20,21 @@ logger = logging.getLogger(__name__)
 # -- Search queries themed for watch niche --
 
 _WATCH_QUERIES_BASE: list[str] = [
-    "site:instagram.com/reel rolex watches",
-    "site:instagram.com/reel omega seamaster",
-    "site:instagram.com/reel audemars piguet",
-    "site:instagram.com/reel luxury watch collection",
-    "site:instagram.com/reel watch review",
-    "site:instagram.com/reel watch unboxing",
-    "site:instagram.com/reel patek philippe",
-    "site:instagram.com/reel tag heuer",
-    "site:instagram.com/reel breitling",
-    "site:instagram.com/reel panerai",
-    "site:instagram.com/reel tudor watches",
-    "site:instagram.com/reel seiko mod",
-    "site:instagram.com/reel hublot",
-    "site:instagram.com/reel cartier watch",
-    "site:instagram.com/reel watch collection",
-    "site:instagram.com/reel watch of the day",
-    "site:instagram.com/reel wrist watch",
-    "site:instagram.com/reel mens watch",
-    "site:instagram.com/reel vintage watch",
+    "instagram reel rolex watches",
+    "instagram reel omega seamaster",
+    "instagram reel audemars piguet",
+    "instagram reel luxury watch",
+    "instagram reel watch collection",
+    "instagram reel patek philippe",
+    "instagram reel tag heuer",
+    "instagram reel seiko watch",
+    "instagram reel vintage watch",
+    "instagram reel watch unboxing",
 ]
 
 _WATCH_QUERIES_RU: list[str] = [
-    "site:instagram.com/reel часы Rolex",
-    "site:instagram.com/reel часы Omega",
-    "site:instagram.com/reel часы luxury",
-    "site:instagram.com/reel часы коллекция",
+    "instagram reel часы Rolex",
+    "instagram reel часы Omega",
 ]
 
 
@@ -65,14 +54,21 @@ def _extract_shortcode(href: str) -> str:
 def search_reels(
     queries: list[str] | None = None,
     max_results_per_query: int = 10,
-    delay_between: float = 1.5,
+    delay_between: float = 1.0,
     include_ru: bool = False,
+    query_timeout: float = 15.0,
+    max_queries: int = 6,
 ) -> list[dict[str, Any]]:
     """Search DuckDuckGo for Instagram Reel URLs.
 
+    Args:
+        query_timeout: Max seconds per individual query.
+        max_queries: Max number of queries to try (saves time).
+
     Returns list of dicts: {shortcode, url, title, source}
     """
-    # Prefer duckduckgo_search (older, uses DDG backend) over ddgs (newer, uses Yahoo)
+    import concurrent.futures
+
     DDGS = None
     try:
         from duckduckgo_search import DDGS  # type: ignore[no-redef]
@@ -88,28 +84,46 @@ def search_reels(
     q_list = list(queries or _WATCH_QUERIES_BASE)
     if include_ru:
         q_list.extend(_WATCH_QUERIES_RU)
+    random.shuffle(q_list)
+    q_list = q_list[:max_queries]
 
     all_results: list[dict[str, Any]] = []
     seen_shortcodes: set[str] = set()
 
-    for q in q_list:
+    def _do_query(q: str) -> list[dict]:
         try:
             results = list(DDGS().text(q, max_results=max_results_per_query))
+            found = []
             for r in results:
                 href = r.get("href", "")
                 sc = _extract_shortcode(href)
-                if not sc or sc in seen_shortcodes:
+                if not sc:
                     continue
-                seen_shortcodes.add(sc)
-                all_results.append({
+                found.append({
                     "shortcode": sc,
                     "url": href,
                     "title": r.get("title", ""),
                     "source": "duckduckgo",
                 })
+            return found
         except Exception as exc:
             logger.warning("watch_discovery: query '%s' failed: %s", q[:50], exc)
-        time.sleep(delay_between + random.uniform(0, 0.5))
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_do_query, q): q for q in q_list}
+        for future in concurrent.futures.as_completed(futures, timeout=query_timeout * 2):
+            q = futures[future]
+            try:
+                results = future.result(timeout=query_timeout)
+                for r in results:
+                    if r["shortcode"] not in seen_shortcodes:
+                        seen_shortcodes.add(r["shortcode"])
+                        all_results.append(r)
+            except concurrent.futures.TimeoutError:
+                logger.warning("watch_discovery: query '%s' timed out", q[:50])
+            except Exception as exc:
+                logger.warning("watch_discovery: query '%s' error: %s", q[:50], exc)
 
     logger.info(
         "watch_discovery: found %d unique Reels from %d queries",

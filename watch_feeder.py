@@ -627,11 +627,14 @@ async def candidate_scan_loop(bot) -> None:
         try:
             new_items: list[dict] = []
 
-            # -- PRIMARY: DuckDuckGo search discovery (no Instagram auth) --
+            # -- DuckDuckGo search discovery (no Instagram auth) --
             try:
                 from watch_discovery import discover_trending_reels
-                search_results = await discover_trending_reels(
-                    top_n=50, include_ru=True, enrich_metadata=False,
+                search_results = await asyncio.wait_for(
+                    discover_trending_reels(
+                        top_n=50, include_ru=True, enrich_metadata=False,
+                    ),
+                    timeout=90,
                 )
                 if search_results:
                     for r in search_results:
@@ -645,31 +648,11 @@ async def candidate_scan_loop(bot) -> None:
                         len(new_items),
                     )
             except ImportError:
-                logger.info("wf_scan: watch_discovery not installed, using instagrapi")
+                logger.info("wf_scan: watch_discovery not installed")
+            except asyncio.TimeoutError:
+                logger.warning("wf_scan: DuckDuckGo timed out (90s)")
             except Exception as exc:
                 logger.warning("wf_scan: DuckDuckGo failed: %s", exc)
-
-            # -- FALLBACK: instagrapi account scanning (needs cookies) --
-            if not new_items:
-                try:
-                    from instagram_download import instagram_is_active_check
-                    if instagram_is_active_check():
-                        start = (cycle * batch_size) % len(accounts)
-                        batch = [
-                            accounts[(start + i) % len(accounts)]
-                            for i in range(batch_size)
-                        ]
-                        logger.info(
-                            "wf_scan: fallback instagrapi %d-%d of %d",
-                            start + 1, start + batch_size, len(accounts),
-                        )
-                        new_items = await _scan_batch_slow(batch)
-                    else:
-                        logger.info("wf_scan: IG inactive + search empty, sleep 30 min")
-                        await asyncio.sleep(1800)
-                        continue
-                except Exception as exc:
-                    logger.warning("wf_scan: instagrapi fallback failed: %s", exc)
 
             # Add to cache
             added = 0
