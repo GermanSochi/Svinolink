@@ -517,44 +517,26 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Download, build caption, send to all chats. Returns True if sent."""
-    from instagram_download import remove_file
-    from aiogram.types import FSInputFile
-
+    """Build caption with Instagram link, send to all chats. Returns True if sent."""
     sc = item["shortcode"]
-    fp = None
-    try:
-        fp = await asyncio.to_thread(_download_shortcode, sc)
-    except Exception as exc:
-        logger.warning("watch_feed: dl %s failed: %s", sc, exc)
-        return False
+    url = item.get("url") or f"https://www.instagram.com/reel/{sc}/"
 
-    if fp is None:
-        return False
-
+    # Try to enrich with media info (caption, engagement) — fast oEmbed, no download
     info = await asyncio.to_thread(_get_media_info, sc)
     if info:
         item = {**item, **{k: v for k, v in info.items() if v}}
 
     caption = _build_caption(item)
     sent = False
-    try:
-        for cid in chat_ids:
-            try:
-                await bot.send_video(
-                    chat_id=cid,
-                    video=FSInputFile(fp),
-                    caption=caption,
-                )
-                sent = True
-            except Exception as exc:
-                logger.warning("watch_feed: send to %s failed: %s", cid, exc)
-    finally:
-        remove_file(fp)
-
-    # Human-like delay after posting (2-5s, Gumbel-distributed)
-    from instagram_anti_detection import async_smart_sleep
-    await async_smart_sleep(2.0, 5.0)
+    for cid in chat_ids:
+        try:
+            await bot.send_message(
+                chat_id=cid,
+                text=caption,
+            )
+            sent = True
+        except Exception as exc:
+            logger.warning("watch_feed: send to %s failed: %s", cid, exc)
     return sent
 
 
