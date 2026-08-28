@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -150,40 +151,40 @@ async def cmd_wf_stats(message: Message) -> None:
 
 @router.message(Command("wf_run"), F.chat.type == "private")
 async def cmd_wf_run(message: Message) -> None:
-    """Immediately post best reels: use cache first, scan if empty."""
+    """Immediately post best reels: use cache first, DuckDuckGo discovery if empty."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
     from watch_feeder import (
-        _pop_top_candidates, _load_candidates, _fetch_from_accounts,
+        _pop_top_candidates, _load_candidates, _add_candidates,
         _post_single, _load_posted, _mark_posted,
         _record_cycle, settings as wf_settings,
     )
-    from instagram_download import instagram_is_active_check
 
     if not wf_settings.watch_feeder_enabled:
         await message.answer("⚠️ Watch Feeder выключен")
         return
-    if not instagram_is_active_check():
-        await message.answer("⚠️ Instagram неактивен")
-        return
 
     cache = _load_candidates()
     if cache:
-        # Use cache
         items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
         source = f"📦 из кэша ({len(cache)} шт)"
     else:
-        # Scan now
-        await message.answer("📦 Кэш пуст, сканирую 40 аккаунтов… (~2 мин)")
+        # DuckDuckGo discovery
+        await message.answer("🔍 Кэш пуст, ищу через DuckDuckGo…")
         try:
-            items = await _fetch_from_accounts(top_n=wf_settings.wf_posts_per_hour)
+            from watch_discovery import search_reels
+            results = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: search_reels(max_results_per_query=10)
+            )
+            added = _add_candidates(results)
+            items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
+            source = f"🌐 DuckDuckGo: нашёл {len(results)}, добавил {added} новых"
         except Exception as exc:
-            logger.error("wf_run scan failed: %s", exc, exc_info=True)
-            await message.answer(f"❌ Ошибка скана: {exc}")
+            logger.error("wf_run discovery failed: %s", exc, exc_info=True)
+            await message.answer(f"❌ DuckDuckGo: {exc}")
             return
-        source = "🔍 прямой скан"
 
     if not items:
         await message.answer("❌ Нет кандидатов")
@@ -192,7 +193,7 @@ async def cmd_wf_run(message: Message) -> None:
     # Show candidates list
     lines = [f"{source} — {len(items)} кандидатов:"]
     for i, item in enumerate(items[:8], 1):
-        lines.append(f"{i}. @{item.get('username', '?')} — ❤️{item.get('likes', 0)} 📹{item.get('views', 0)}")
+        lines.append(f"{i}. {item.get('shortcode', '?')} — ❤️{item.get('likes', 0)} 📹{item.get('views', 0)}")
     await message.answer("\n".join(lines))
 
     bot = message.bot
@@ -220,22 +221,18 @@ async def cmd_wf_run(message: Message) -> None:
 
 @router.message(Command("wf"), F.chat.type == "private")
 async def cmd_wf(message: Message) -> None:
-    """Post a reel: /wf (random) or /wf keyword (best by likes from matching accounts)."""
+    """Post a reel: /wf (status) or /wf keyword (best reel by keyword via DuckDuckGo)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
-    from instagram_download import instagram_is_active_check
     from watch_feeder import (
-        _fetch_from_accounts, _fetch_keyword, _post_single, _load_posted, _mark_posted,
-        _record_cycle,
+        _post_single, _load_posted, _mark_posted,
+        _record_cycle, settings as wf_settings,
     )
 
-    if not settings.watch_feeder_enabled:
+    if not wf_settings.watch_feeder_enabled:
         await message.answer("⚠️ Watch Feeder выключен")
-        return
-    if not instagram_is_active_check():
-        await message.answer("⚠️ Instagram неактивен")
         return
 
     # Parse: /wf or /wf seiko
@@ -245,7 +242,7 @@ async def cmd_wf(message: Message) -> None:
 
     if not keyword:
         # /wf without args → show status + help
-        from watch_feeder import get_stats_summary, settings as wf_settings
+        from watch_feeder import get_stats_summary
         await message.answer(
             f"{get_stats_summary()}\n"
             f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
@@ -259,38 +256,47 @@ async def cmd_wf(message: Message) -> None:
         )
         return
 
-    await message.answer(f"🔍 Ищу лучший reel по «{keyword}»...")
+    # DuckDuckGo keyword search
+    await message.answer(f"🔍 Ищу reel по «{keyword}» через DuckDuckGo…")
     try:
-        candidates = await _fetch_keyword(keyword, top_n=10)
+        from watch_discovery import search_reels
+        loop = asyncio.get_event_loop()
+        candidates = await loop.run_in_executor(
+            None, lambda: search_reels(
+                queries=[f"site:instagram.com/reel {keyword}"],
+                max_results_per_query=15,
+            )
+        )
     except Exception as exc:
         await message.answer(f"❌ Ошибка: {exc}")
         return
     if not candidates:
         await message.answer(f"❌ Ничего не нашёл по «{keyword}»")
         return
-    # Pick best by likes
+
     posted = _load_posted()
     fresh = [c for c in candidates if c["shortcode"] not in posted]
     if not fresh:
         await message.answer(f"❌ Все {len(candidates)} по «{keyword}» уже постились")
         return
-    chosen = max(fresh, key=lambda x: x.get("likes", 0))
-    label = f"«{keyword}» (лучший из {len(fresh)})"
+
+    # Pick first (best by search rank)
+    chosen = fresh[0]
 
     bot = message.bot
-    chat_ids = settings.watch_feeder_chat_ids
+    chat_ids = wf_settings.watch_feeder_chat_ids
 
     ok = await _post_single(bot, chat_ids, chosen)
     if ok:
         _mark_posted(posted, chosen["shortcode"])
         _record_cycle(1, 0)
         sc = chosen["shortcode"]
-        likes = chosen.get("likes", 0)
         await message.answer(
-            f"✅ Постнуто! @{chosen.get('username', '?')}\n"
-            f"❤️ {likes} likes | {label}\n"
-            f"instagram.com/reel/{sc}"
+            f"✅ Постнуто!\n"
+            f"Reel: instagram.com/reel/{sc}/\n"
+            f"Title: {chosen.get('title', '—')[:80]}"
         )
+        logger.info("wf keyword post: %s", sc)
     else:
         _record_cycle(0, 1)
-        await message.answer(f"❌ Не удалось отправить {chosen['shortcode']}")
+        await message.answer("❌ Не удалось постить")

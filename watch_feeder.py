@@ -437,6 +437,10 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
             })
             seen.add(sc)
 
+        # Anti-detection: randomized delay between accounts
+        from instagram_anti_detection import between_accounts_delay
+        await asyncio.sleep(between_accounts_delay())
+
     logger.info("watch_feed: %d candidates from %d accounts (%d failed, %d posted-dedup)",
                 len(candidates), len(accounts), failed, len(posted))
     candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -492,6 +496,10 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
             })
             seen.add(sc)
 
+        # Anti-detection: randomized delay between accounts
+        from instagram_anti_detection import between_accounts_delay
+        await asyncio.sleep(between_accounts_delay())
+
     # Sort by likes (most liked first)
     candidates.sort(key=lambda x: x["likes"], reverse=True)
     logger.info("watch_feed: keyword '%s' found %d candidates from %d accounts", keyword, len(candidates), len(matched))
@@ -536,7 +544,9 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
     finally:
         remove_file(fp)
 
-    await asyncio.sleep(5)
+    # Human-like delay after posting (2-5s, Gumbel-distributed)
+    from instagram_anti_detection import async_smart_sleep
+    await async_smart_sleep(2.0, 5.0)
     return sent
 
 
@@ -615,11 +625,11 @@ def _seconds_until_next_window() -> int:
 # ── Background scanner (24/7, slow) ──
 
 async def candidate_scan_loop(bot) -> None:
-    """Background loop: slowly scan accounts and cache best candidates.
+    """Background loop: discover trending reels and cache best candidates.
 
-    Runs 24/7 regardless of posting window. Each cycle scans a batch of ~10
-    accounts with delays between them. Full rotation of all 40 accounts
-    happens every ~80 minutes. Candidates are cached for 2 days.
+    Primary: DuckDuckGo search engine (no Instagram login needed).
+    Fallback: instagrapi account scanning (requires cookies).
+    Runs 24/7 regardless of posting window. Candidates are cached for 2 days.
     """
     if not settings.watch_feeder_enabled:
         logger.info("wf_scan: DISABLED")
@@ -635,25 +645,51 @@ async def candidate_scan_loop(bot) -> None:
 
     while True:
         try:
-            from instagram_download import instagram_is_active_check
+            new_items: list[dict] = []
 
-            if not instagram_is_active_check():
-                logger.info("wf_scan: Instagram inactive, sleeping 30 min")
-                await asyncio.sleep(1800)
-                continue
+            # -- PRIMARY: DuckDuckGo search discovery (no Instagram auth) --
+            try:
+                from watch_discovery import discover_trending_reels
+                search_results = await discover_trending_reels(
+                    top_n=50, include_ru=True, enrich_metadata=False,
+                )
+                if search_results:
+                    for r in search_results:
+                        r.setdefault("username", r.get("uploader", ""))
+                        r.setdefault("likes", r.get("likes", 0))
+                        r.setdefault("comments", r.get("comments", 0))
+                        r.setdefault("views", r.get("views", 0))
+                    new_items = search_results
+                    logger.info(
+                        "wf_scan: DuckDuckGo found %d candidates",
+                        len(new_items),
+                    )
+            except ImportError:
+                logger.info("wf_scan: watch_discovery not installed, using instagrapi")
+            except Exception as exc:
+                logger.warning("wf_scan: DuckDuckGo failed: %s", exc)
 
-            # Rotate through accounts
-            start = (cycle * batch_size) % len(accounts)
-            batch = [
-                accounts[(start + i) % len(accounts)]
-                for i in range(batch_size)
-            ]
-
-            logger.info("wf_scan: cycle %d, scanning accounts %d–%d of %d",
-                        cycle, start + 1, start + batch_size, len(accounts))
-
-            # Scan batch slowly
-            new_items = await _scan_batch_slow(batch)
+            # -- FALLBACK: instagrapi account scanning (needs cookies) --
+            if not new_items:
+                try:
+                    from instagram_download import instagram_is_active_check
+                    if instagram_is_active_check():
+                        start = (cycle * batch_size) % len(accounts)
+                        batch = [
+                            accounts[(start + i) % len(accounts)]
+                            for i in range(batch_size)
+                        ]
+                        logger.info(
+                            "wf_scan: fallback instagrapi %d-%d of %d",
+                            start + 1, start + batch_size, len(accounts),
+                        )
+                        new_items = await _scan_batch_slow(batch)
+                    else:
+                        logger.info("wf_scan: IG inactive + search empty, sleep 30 min")
+                        await asyncio.sleep(1800)
+                        continue
+                except Exception as exc:
+                    logger.warning("wf_scan: instagrapi fallback failed: %s", exc)
 
             # Add to cache
             added = 0
@@ -665,19 +701,20 @@ async def candidate_scan_loop(bot) -> None:
 
             total_cache = len(_load_candidates())
             logger.info(
-                "wf_scan: batch done — found %d, added %d new, cache=%d",
+                "wf_scan: cycle done -- found %d, added %d new, cache=%d",
                 len(new_items), added, total_cache,
             )
 
             cycle += 1
-            # Sleep ~20 min between batches
-            await asyncio.sleep(20 * 60)
+            # Sleep ~18-25 min between batches (randomized)
+            await asyncio.sleep(random.uniform(18 * 60, 25 * 60))
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("wf_scan error: %s", exc, exc_info=True)
-            await asyncio.sleep(300)
+            # Longer cooldown on errors (8-15 min) to avoid hammering
+            await asyncio.sleep(random.uniform(8 * 60, 15 * 60))
 
 
 async def _scan_batch_slow(usernames: list[str]) -> list[dict]:
@@ -692,12 +729,13 @@ async def _scan_batch_slow(usernames: list[str]) -> list[dict]:
     for username in usernames:
         try:
             uid = await asyncio.to_thread(cl.user_id_from_username, username)
-            # Small delay between API calls
-            await asyncio.sleep(random.uniform(1.5, 3.0))
+            # Human-like delay between API calls (Gumbel-distributed)
+            from instagram_anti_detection import async_smart_sleep, between_accounts_delay
+            await async_smart_sleep(1.5, 3.0)
             medias = await asyncio.to_thread(cl.user_medias, uid, 12)
         except Exception as exc:
             logger.info("wf_scan: @%s failed: %s", username, exc)
-            await asyncio.sleep(2)
+            await asyncio.sleep(random.uniform(2.0, 5.0))
             continue
 
         for m in medias:
@@ -721,8 +759,8 @@ async def _scan_batch_slow(usernames: list[str]) -> list[dict]:
             })
             seen.add(sc)
 
-        # Pause between accounts
-        await asyncio.sleep(random.uniform(2.0, 4.0))
+        # Pause between accounts (3-12s, randomized)
+        await asyncio.sleep(between_accounts_delay())
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates
@@ -826,8 +864,9 @@ async def watch_feed_loop(bot) -> None:
 
                 # Sleep between posts (skip sleep after the last one)
                 if idx < len(candidates) - 1:
-                    # Add ±15% jitter to look more natural
-                    jitter = gap * random.uniform(0.85, 1.15)
+                    # Gumbel-distributed jitter ±20%, looks more natural than uniform
+                    from instagram_anti_detection import post_jitter
+                    jitter = post_jitter(gap)
                     await asyncio.sleep(jitter)
 
             # ── 3. Notify & sleep until next hour ──
