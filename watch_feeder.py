@@ -24,14 +24,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Dispatcher reference (set at startup so _post_single can feed_update) ──
+# ── Auto-posting pause flag (toggle via /wf_stop /wf_start) ──
 
-_dispatcher: "Dispatcher | None" = None
-
-
-def set_dispatcher(dp: "Dispatcher") -> None:
-    global _dispatcher
-    _dispatcher = dp
+_auto_posting_paused: bool = False
 
 
 # ── Curated account list (editable at runtime via data/watch_accounts.json) ──
@@ -570,38 +565,77 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Send Instagram link to channel(s) and feed it back to the dispatcher
-    so the IG handler downloads and sends the video (just like a user post)."""
+    """Download reel video and send it directly to channel(s).
+
+    Works exactly like when a user posts a link in chat:
+    bot downloads the video and sends it as a video message.
+    Falls back to text link only if download completely fails.
+    """
+    from instagram_download import (
+        download_instagram_video, remove_file,
+        DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
+        TELEGRAM_MAX_BYTES,
+    )
+    from aiogram.types import FSInputFile
+
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
+    file_path = None
+
+    try:
+        logger.info("watch_feed: downloading %s", sc)
+        async with _download_semaphore:
+            file_path, caption = await asyncio.wait_for(
+                asyncio.to_thread(download_instagram_video, link),
+                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+            )
+
+        size = file_path.stat().st_size
+        if size > TELEGRAM_MAX_BYTES:
+            logger.warning("watch_feed: %s too large (%d bytes)", sc, size)
+            remove_file(file_path)
+            file_path = None
+    except asyncio.TimeoutError:
+        logger.warning("watch_feed: download timeout for %s", sc)
+        remove_file(file_path)
+        file_path = None
+    except Exception as exc:
+        logger.warning("watch_feed: download failed for %s: %s", sc, exc)
+        remove_file(file_path)
+        file_path = None
+
     sent = False
     for cid in chat_ids:
         try:
-            msg = await bot.send_message(chat_id=cid, text=link)
+            if file_path:
+                await bot.send_video(
+                    chat_id=cid,
+                    video=FSInputFile(file_path),
+                    supports_streaming=True,
+                )
+            else:
+                await bot.send_message(chat_id=cid, text=link)
             sent = True
-            # Feed the message back to the dispatcher so IG handler processes it
-            if _dispatcher is not None:
-                try:
-                    from aiogram.types import Update
-                    update = Update(update_id=abs(hash(f"wf_{cid}_{sc}_{msg.message_id}")) % (2**31), message=msg)
-                    # Run in background so download doesn't block posting loop
-                    asyncio.create_task(_safe_feed_update(bot, update, sc))
-                except Exception as exc:
-                    logger.warning("watch_feed: feed_update failed for %s: %s", sc, exc)
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
+
+    if file_path:
+        remove_file(file_path)
     return sent
 
 
-async def _safe_feed_update(bot, update, sc: str) -> None:
-    """Feed update to dispatcher; log but never crash."""
-    try:
-        await _dispatcher.feed_update(bot, update)
-        logger.info("watch_feed: IG handler processed %s", sc)
-    except asyncio.CancelledError:
-        pass
-    except Exception as exc:
-        logger.warning("watch_feed: IG handler failed for %s: %s", sc, exc)
+def pause_auto_posting() -> None:
+    global _auto_posting_paused
+    _auto_posting_paused = True
+
+
+def resume_auto_posting() -> None:
+    global _auto_posting_paused
+    _auto_posting_paused = False
+
+
+def is_auto_posting_paused() -> bool:
+    return _auto_posting_paused
 
 
 async def _process_items(
@@ -834,6 +868,12 @@ async def watch_feed_loop(bot) -> None:
 
     while True:
         try:
+            # ── Check pause flag ──
+            if _auto_posting_paused:
+                logger.info("watch_feed: paused by /wf_stop, sleeping 30s")
+                await asyncio.sleep(30)
+                continue
+
             # ── Check posting window ──
             # TODO: Remove this comment and restore window check after testing
             # if not _in_posting_window():

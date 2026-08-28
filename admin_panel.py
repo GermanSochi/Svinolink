@@ -145,8 +145,33 @@ async def cmd_wf_stats(message: Message) -> None:
         message.from_user.id, message.from_user.username
     ):
         return
-    from watch_feeder import get_stats_summary
-    await message.answer(get_stats_summary())
+    from watch_feeder import get_stats_summary, is_auto_posting_paused
+    status = "⏸ Пауза" if is_auto_posting_paused() else "▶ Работает"
+    await message.answer(f"{status}\n\n{get_stats_summary()}")
+
+
+@router.message(Command("wf_stop"), F.chat.type == "private")
+async def cmd_wf_stop(message: Message) -> None:
+    """Pause auto-posting."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import pause_auto_posting
+    pause_auto_posting()
+    await message.answer("⏸ Автопостинг остановлен")
+
+
+@router.message(Command("wf_start"), F.chat.type == "private")
+async def cmd_wf_start(message: Message) -> None:
+    """Resume auto-posting."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import resume_auto_posting
+    resume_auto_posting()
+    await message.answer("▶ Автопостинг запущен")
 
 
 @router.message(Command("wf_run"), F.chat.type == "private")
@@ -250,6 +275,8 @@ async def cmd_wf(message: Message) -> None:
             "/wf_go — 🚀 быстрый пост (1 лучший reel)\n"
             "/wf_run — постить из кэша\n"
             "/wf rolex — лучший reel по бренду\n"
+            "/wf_stop — ⏸ остановить автопостинг\n"
+            "/wf_start — ▶ запустить автопостинг\n"
             "/wf_info — полная информация\n"
             "/wf_stats — статистика"
         )
