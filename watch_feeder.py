@@ -517,11 +517,11 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Build caption with Instagram link, send to all chats. Returns True if sent."""
+    """Send Instagram link + caption to all chats. Returns True if sent."""
     sc = item["shortcode"]
-    url = item.get("url") or f"https://www.instagram.com/reel/{sc}/"
+    link = f"https://www.instagram.com/reel/{sc}/"
 
-    # Try to enrich with media info (caption, engagement) — fast oEmbed, no download
+    # Try to enrich with media info (caption, engagement)
     info = await asyncio.to_thread(_get_media_info, sc)
     if info:
         item = {**item, **{k: v for k, v in info.items() if v}}
@@ -530,10 +530,10 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
     sent = False
     for cid in chat_ids:
         try:
-            await bot.send_message(
-                chat_id=cid,
-                text=caption,
-            )
+            # 1) Send link first — Telegram will embed preview
+            await bot.send_message(chat_id=cid, text=f"🔗 {link}")
+            # 2) Then send caption
+            await bot.send_message(chat_id=cid, text=caption)
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
