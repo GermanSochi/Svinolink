@@ -1,7 +1,6 @@
 """Watch Feeder v2 — auto-post trending watch videos from Instagram.
 
 Features:
-  * Queue-based processing: shortcodes from data/watch_queue.json get priority.
   * Account discovery: scans curated IG accounts for trending reels.
   * Rich captions: brand detection, engagement stats, hashtags, IG link.
   * Staggered posting: configurable delay, daily cap, posting window.
@@ -66,7 +65,6 @@ _BRAND_MAP: dict[str, tuple[str, str]] = {
 
 _ACCOUNTS_FILE = settings.data_dir / "watch_accounts.json"
 _POSTED_FILE = settings.data_dir / "watch_posted.json"
-_QUEUE_FILE = settings.data_dir / "watch_queue.json"
 _STATS_FILE = settings.data_dir / "watch_stats.json"
 _MAX_BYTES = 52_428_800  # 50 MiB Telegram limit
 
@@ -110,51 +108,6 @@ def _mark_posted(posted: set[str], shortcode: str) -> None:
     _save_posted(posted)
 
 
-# ── Queue management ──
-
-def load_queue() -> list[dict]:
-    """Load queue entries. Each is {shortcode, added_at, source?}."""
-    if _QUEUE_FILE.is_file():
-        try:
-            d = json.loads(_QUEUE_FILE.read_text(encoding="utf-8"))
-            if isinstance(d, list):
-                return d
-        except Exception:
-            pass
-    return []
-
-
-def save_queue(queue: list[dict]) -> None:
-    _QUEUE_FILE.write_text(
-        json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
-def add_to_queue(shortcodes: list[str], source: str = "manual") -> int:
-    """Add shortcodes to queue, skip already-posted or already-queued."""
-    queue = load_queue()
-    posted = _load_posted()
-    existing = {e["shortcode"] for e in queue}
-    added = 0
-    now = time.time()
-    for sc in shortcodes:
-        sc = sc.strip()
-        if not sc or sc in posted or sc in existing:
-            continue
-        queue.append({"shortcode": sc, "added_at": now, "source": source})
-        added += 1
-    save_queue(queue)
-    return added
-
-
-def pop_queue_batch(max_items: int = 3) -> list[dict]:
-    """Pop up to max_items entries from the front of queue."""
-    queue = load_queue()
-    batch = queue[:max_items]
-    save_queue(queue[max_items:])
-    return batch
-
-
 # ── Statistics ──
 
 def _load_stats() -> dict:
@@ -183,7 +136,6 @@ def _record_cycle(posted_count: int, error_count: int) -> None:
 
 def get_stats_summary() -> str:
     s = _load_stats()
-    queue_len = len(load_queue())
     posted_count = len(_load_posted())
     return (
         f"\u231a Watch Feeder Stats\n"
@@ -191,7 +143,6 @@ def get_stats_summary() -> str:
         f"Total posted: {s.get('total_posted', 0)}\n"
         f"Total errors: {s.get('total_errors', 0)}\n"
         f"In dedup DB: {posted_count}\n"
-        f"In queue: {queue_len}\n"
         f"Accounts: {len(_load_accounts())}\n"
     )
 
@@ -536,30 +487,18 @@ async def _process_items(
 
 # ── Notify admin ──
 
-async def _notify_admin(bot, sent: int, errors: int, queue_left: int) -> None:
+async def _notify_admin(bot, sent: int, errors: int) -> None:
     if not settings.admin_ids:
         return
     msg = (
         f"\u231a Watch Feeder cycle done\n"
-        f"Posted: {sent} \u00b7 Errors: {errors} \u00b7 Queue left: {queue_left}"
+        f"Posted: {sent} \u00b7 Errors: {errors}"
     )
     for admin_id in settings.admin_ids:
         try:
             await bot.send_message(admin_id, msg)
         except Exception:
             pass
-
-
-# ── Seed queue from file ──
-
-def seed_queue_from_links_file(filepath: str | Path) -> int:
-    """Parse a text file with Instagram reel URLs, extract shortcodes, add to queue."""
-    p = Path(filepath)
-    if not p.is_file():
-        return 0
-    text = p.read_text(encoding="utf-8")
-    shortcodes = re.findall(r"/reel/([A-Za-z0-9_-]+)", text)
-    return add_to_queue(shortcodes, source="links_file")
 
 
 # ── Time helpers ──
@@ -597,10 +536,10 @@ def _seconds_until_next_window() -> int:
 # ── Main loop ──
 
 async def watch_feed_loop(bot) -> None:
-    """Background loop: post 5-10 items/hour spread evenly during posting window (7:00–01:00 MSK).
+    """Background loop: post best reels during posting window (7:00–01:00 MSK).
 
     Each hour the loop:
-      1. Builds a batch of candidates (queue + account scan)
+      1. Scans curated IG accounts for fresh reels
       2. Posts them ONE-BY-ONE with ~7 min gaps between posts
       3. Sleeps until the next hour
     """
@@ -645,26 +584,11 @@ async def watch_feed_loop(bot) -> None:
                 continue
 
             # ── 1. Build candidate list for this hour ──
-            candidates: list[dict] = []
-
-            # 1a. Queue items (manual / imported shortcodes)
-            queue_batch = pop_queue_batch(max_items=posts_per_hour)
-            if queue_batch:
-                logger.info("watch_feed: %d items from queue", len(queue_batch))
-                candidates.extend(
-                    {"shortcode": e["shortcode"], "username": "", "likes": 0,
-                     "comments": 0, "views": 0}
-                    for e in queue_batch
-                )
-
-            # 1b. Account discovery — fill remaining slots
-            remaining = posts_per_hour - len(candidates)
-            if remaining > 0:
-                try:
-                    discovered = await _fetch_from_accounts(top_n=remaining)
-                    candidates.extend(discovered)
-                except Exception as exc:
-                    logger.warning("watch_feed: account discovery failed: %s", exc)
+            try:
+                candidates = await _fetch_from_accounts(top_n=posts_per_hour)
+            except Exception as exc:
+                logger.warning("watch_feed: account discovery failed: %s", exc)
+                candidates = []
 
             if not candidates:
                 logger.info("watch_feed: no candidates this hour, sleeping until next hour")
@@ -712,10 +636,9 @@ async def watch_feed_loop(bot) -> None:
                     await asyncio.sleep(jitter)
 
             # ── 3. Notify & sleep until next hour ──
-            queue_left = len(load_queue())
             _record_cycle(sent, errors)
             if sent > 0 or errors > 0:
-                await _notify_admin(bot, sent, errors, queue_left)
+                await _notify_admin(bot, sent, errors)
 
             await _sleep_until_next_hour()
 

@@ -137,28 +137,6 @@ async def cmd_admin_reset(message: Message) -> None:
 
 # ── Watch Feeder admin commands ──────────────────────────────
 
-@router.message(Command("wf_queue"), F.chat.type == "private")
-async def cmd_wf_queue(message: Message) -> None:
-    """Show current watch feeder queue."""
-    if not message.from_user or not is_admin_user(
-        message.from_user.id, message.from_user.username
-    ):
-        return
-    from watch_feeder import load_queue
-    queue = load_queue()
-    if not queue:
-        await message.answer("Очередь пуста")
-        return
-    lines = []
-    for i, entry in enumerate(queue[:20], 1):
-        sc = entry.get("shortcode", "?")
-        src = entry.get("source", "?")
-        lines.append(f"{i}. {sc} ({src})")
-    if len(queue) > 20:
-        lines.append(f"... и ещё {len(queue) - 20}")
-    await message.answer(f"Очередь ({len(queue)}):\n" + "\n".join(lines))
-
-
 @router.message(Command("wf_stats"), F.chat.type == "private")
 async def cmd_wf_stats(message: Message) -> None:
     """Show watch feeder statistics."""
@@ -170,82 +148,60 @@ async def cmd_wf_stats(message: Message) -> None:
     await message.answer(get_stats_summary())
 
 
-@router.message(Command("wf_clear"), F.chat.type == "private")
-async def cmd_wf_clear(message: Message) -> None:
-    """Clear the watch feeder queue."""
-    if not message.from_user or not is_admin_user(
-        message.from_user.id, message.from_user.username
-    ):
-        return
-    from watch_feeder import save_queue
-    save_queue([])
-    await message.answer("Очередь очищена")
-
-
 @router.message(Command("wf_run"), F.chat.type == "private")
 async def cmd_wf_run(message: Message) -> None:
-    """Immediately run one watch feeder cycle (manual override, posts_per_hour items)."""
+    """Immediately scan accounts and post best reels (manual override)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
     from watch_feeder import (
-        load_queue, pop_queue_batch, _process_items, _record_cycle,
-        _notify_admin, _in_posting_window, _fetch_from_accounts,
-        settings as wf_settings,
+        _fetch_from_accounts, _post_single, _load_posted, _mark_posted,
+        _record_cycle, _in_posting_window, settings as wf_settings,
     )
     from instagram_download import instagram_is_active_check
 
     if not wf_settings.watch_feeder_enabled:
-        await message.answer("⚠️ Watch Feeder выключен (WATCH_FEEDER_ENABLED=0)")
-        return
-    if not wf_settings.watch_feeder_chat_ids:
-        await message.answer("⚠️ Нет chat IDs (WATCH_FEEDER_CHAT_IDS)")
+        await message.answer("⚠️ Watch Feeder выключен")
         return
     if not instagram_is_active_check():
-        await message.answer("⚠️ Instagram неактивен (нет cookies/сессии)")
+        await message.answer("⚠️ Instagram неактивен")
         return
 
-    queue = load_queue()
     in_window = _in_posting_window()
-    window_tag = "✅ в окне" if in_window else "⏰ вне окна (ручной запуск)"
-    await message.answer(
-        f"⚡ Запускаю цикл ({window_tag})...\n"
-        f"Очередь: {len(queue)} | Чаты: {wf_settings.watch_feeder_chat_ids}\n"
-        f"Лимит: {wf_settings.wf_posts_per_hour} постов/час"
-    )
+    window_tag = "✅ в окне" if in_window else "⏰ вне окна"
+    await message.answer(f"⚡ Сканирую аккаунты ({window_tag})...")
 
-    # Build items: queue first, then account discovery
-    items: list[dict] = []
-    batch = pop_queue_batch(max_items=wf_settings.wf_posts_per_hour)
-    if batch:
-        items.extend(
-            {"shortcode": e["shortcode"], "username": "", "likes": 0,
-             "comments": 0, "views": 0}
-            for e in batch
-        )
-
-    remaining = wf_settings.wf_posts_per_hour - len(items)
-    if remaining > 0:
-        try:
-            discovered = await _fetch_from_accounts(top_n=remaining)
-            items.extend(discovered)
-        except Exception as exc:
-            await message.answer(f"⚠️ Account scan error: {exc}")
+    try:
+        items = await _fetch_from_accounts(top_n=wf_settings.wf_posts_per_hour)
+    except Exception as exc:
+        await message.answer(f"❌ Ошибка скана: {exc}")
+        return
 
     if not items:
-        await message.answer("❌ Нет кандидатов (очередь пуста + скан ничего не дал)")
+        await message.answer("❌ Не нашёл свежих reels")
         return
 
     bot = message.bot
     chat_ids = wf_settings.watch_feeder_chat_ids
-    sent, errors = await _process_items(bot, chat_ids, items)
-    queue_left = len(load_queue())
-    _record_cycle(sent, errors)
+    posted = _load_posted()
+    sent = 0
+    errors = 0
 
-    result = f"✅ Готово!\nОтправлено: {sent}\nОшибки: {errors}\nОсталось в очереди: {queue_left}"
-    await message.answer(result)
-    logger.info("wf_run: sent=%d errors=%d queue_left=%d", sent, errors, queue_left)
+    for item in items:
+        sc = item.get("shortcode", "")
+        if not sc or sc in posted:
+            continue
+        ok = await _post_single(bot, chat_ids, item)
+        if ok:
+            _mark_posted(posted, sc)
+            sent += 1
+        else:
+            errors += 1
+
+    _record_cycle(sent, errors)
+    await message.answer(f"✅ Готово!\nОтправлено: {sent}\nОшибки: {errors}")
+    logger.info("wf_run: sent=%d errors=%d", sent, errors)
 
 
 @router.message(Command("wf"), F.chat.type == "private")
@@ -283,9 +239,7 @@ async def cmd_wf(message: Message) -> None:
             "Команды:\n"
             "/wf brand — лучший reel по бренду\n"
             "/wf_run — полный цикл (8 постов)\n"
-            "/wf_queue — очередь\n"
-            "/wf_stats — статистика\n"
-            "/wf_clear — очистить очередь"
+            "/wf_stats — статистика"
         )
         return
 
