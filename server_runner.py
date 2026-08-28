@@ -15,7 +15,7 @@ from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
 from chat_style import daily_style_loop
-from watch_feeder import seed_queue_from_links_file, watch_feed_loop
+from watch_feeder import load_queue, seed_queue_from_links_file, watch_feed_loop
 from config import BASE_DIR, settings
 from instagram_download import init_instagram_downloader
 from game_init import init_game_db
@@ -78,6 +78,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
                 else ("configured" if settings.supabase_database_url.strip() else "off")
             ),
             "watch_feeder": "on" if settings.watch_feeder_enabled else "off",
+            "wf_queue_size": len(load_queue()) if settings.watch_feeder_enabled else 0,
         }
         return web.Response(
             text=json.dumps(payload, ensure_ascii=False),
