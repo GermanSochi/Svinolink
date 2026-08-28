@@ -15,7 +15,7 @@ from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
 from chat_style import daily_style_loop
-from watch_feeder import watch_feed_loop, candidate_scan_loop
+from watch_feeder import watch_feed_loop, candidate_scan_loop, set_dispatcher
 from config import settings
 from instagram_download import init_instagram_downloader
 from game_init import init_game_db
@@ -135,6 +135,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
         setup_application(app, dp, bot=bot)
 
         async def on_startup(app: web.Application) -> None:
+            set_dispatcher(dp)
             await init_chat_memory()
             init_instagram_downloader()
             with suppress(Exception):
@@ -167,6 +168,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
     else:
 
         async def on_startup(app: web.Application) -> None:
+            set_dispatcher(dp)
             await init_chat_memory()
             init_instagram_downloader()
             with suppress(Exception):

@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
 import re
 import time
@@ -24,6 +23,16 @@ from pathlib import Path
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# ── Dispatcher reference (set at startup so _post_single can feed_update) ──
+
+_dispatcher: "Dispatcher | None" = None
+
+
+def set_dispatcher(dp: "Dispatcher") -> None:
+    global _dispatcher
+    _dispatcher = dp
+
 
 # ── Curated account list (editable at runtime via data/watch_accounts.json) ──
 
@@ -561,61 +570,38 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Download reel and send video to channel(s)."""
+    """Send Instagram link to channel(s) and feed it back to the dispatcher
+    so the IG handler downloads and sends the video (just like a user post)."""
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
     sent = False
-
-    # Try downloading video
-    file_path = None
-    try:
-        from instagram_download import (
-            download_instagram_video, remove_file,
-            DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
-        )
-        from aiogram.types import FSInputFile
-
-        logger.info("watch_feed: downloading %s", link)
-        async with _download_semaphore:
-            file_path, caption = await asyncio.wait_for(
-                asyncio.to_thread(download_instagram_video, link),
-                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
-            )
-
-        size = os.path.getsize(file_path)
-        if size > _MAX_BYTES:
-            logger.warning("watch_feed: %s too large (%d bytes), sending link", sc, size)
-            remove_file(file_path)
-            file_path = None
-    except asyncio.TimeoutError:
-        logger.warning("watch_feed: download timeout for %s, sending link", sc)
-        remove_file(file_path)
-        file_path = None
-    except Exception as exc:
-        logger.warning("watch_feed: download failed for %s: %s, sending link", sc, exc)
-        remove_file(file_path)
-        file_path = None
-
     for cid in chat_ids:
         try:
-            if file_path:
-                await bot.send_video(
-                    chat_id=cid,
-                    video=FSInputFile(file_path),
-                    caption=link,
-                    supports_streaming=True,
-                )
-            else:
-                await bot.send_message(chat_id=cid, text=link)
+            msg = await bot.send_message(chat_id=cid, text=link)
             sent = True
+            # Feed the message back to the dispatcher so IG handler processes it
+            if _dispatcher is not None:
+                try:
+                    from aiogram.types import Update
+                    update = Update(update_id=abs(hash(f"wf_{cid}_{sc}_{msg.message_id}")) % (2**31), message=msg)
+                    # Run in background so download doesn't block posting loop
+                    asyncio.create_task(_safe_feed_update(bot, update, sc))
+                except Exception as exc:
+                    logger.warning("watch_feed: feed_update failed for %s: %s", sc, exc)
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
-
-    # Cleanup temp file
-    if file_path:
-        remove_file(file_path)
-
     return sent
+
+
+async def _safe_feed_update(bot, update, sc: str) -> None:
+    """Feed update to dispatcher; log but never crash."""
+    try:
+        await _dispatcher.feed_update(bot, update)
+        logger.info("watch_feed: IG handler processed %s", sc)
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning("watch_feed: IG handler failed for %s: %s", sc, exc)
 
 
 async def _process_items(
