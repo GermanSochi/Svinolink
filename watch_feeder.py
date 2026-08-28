@@ -65,6 +65,7 @@ _BRAND_MAP: dict[str, tuple[str, str]] = {
 
 _ACCOUNTS_FILE = settings.data_dir / "watch_accounts.json"
 _POSTED_FILE = settings.data_dir / "watch_posted.json"
+_CANDIDATES_FILE = settings.data_dir / "wf_candidates.json"
 _STATS_FILE = settings.data_dir / "watch_stats.json"
 _MAX_BYTES = 52_428_800  # 50 MiB Telegram limit
 
@@ -108,6 +109,79 @@ def _mark_posted(posted: set[str], shortcode: str) -> None:
     _save_posted(posted)
 
 
+# ── Candidate cache (pre-scanned reels) ──
+
+_CANDIDATES_MAX_AGE_DAYS = 2
+
+
+def _load_candidates() -> list[dict]:
+    """Load pre-scanned candidate reels from cache."""
+    if _CANDIDATES_FILE.is_file():
+        try:
+            d = json.loads(_CANDIDATES_FILE.read_text(encoding="utf-8"))
+            if isinstance(d, list):
+                return d
+        except Exception:
+            pass
+    return []
+
+
+def _save_candidates(candidates: list[dict]) -> None:
+    _CANDIDATES_FILE.write_text(
+        json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _add_candidates(new_items: list[dict]) -> int:
+    """Add new candidates to cache, skip duplicates. Returns count added."""
+    cache = _load_candidates()
+    posted = _load_posted()
+    existing = {c["shortcode"] for c in cache}
+    added = 0
+    now = time.time()
+    for item in new_items:
+        sc = item.get("shortcode", "")
+        if not sc or sc in posted or sc in existing:
+            continue
+        item["fetched_at"] = now
+        cache.append(item)
+        existing.add(sc)
+        added += 1
+    _save_candidates(cache)
+    return added
+
+
+def _prune_candidates() -> int:
+    """Remove candidates older than _CANDIDATES_MAX_AGE_DAYS. Returns count removed."""
+    cache = _load_candidates()
+    if not cache:
+        return 0
+    cutoff = time.time() - _CANDIDATES_MAX_AGE_DAYS * 86400
+    before = len(cache)
+    fresh = [c for c in cache if c.get("fetched_at", 0) >= cutoff]
+    _save_candidates(fresh)
+    removed = before - len(fresh)
+    if removed:
+        logger.info("wf_cache: pruned %d old candidates (%d remain)", removed, len(fresh))
+    return removed
+
+
+def _pop_top_candidates(n: int) -> list[dict]:
+    """Pop the top-N candidates by score from cache (for posting)."""
+    cache = _load_candidates()
+    posted = _load_posted()
+    fresh = [c for c in cache if c.get("shortcode", "") not in posted]
+    if not fresh:
+        return []
+    fresh.sort(key=lambda x: x.get("score", 0), reverse=True)
+    chosen = fresh[:n]
+    # Remove chosen from cache
+    chosen_sc = {c["shortcode"] for c in chosen}
+    remaining = [c for c in cache if c.get("shortcode", "") not in chosen_sc]
+    _save_candidates(remaining)
+    return chosen
+
+
 # ── Statistics ──
 
 def _load_stats() -> dict:
@@ -137,12 +211,14 @@ def _record_cycle(posted_count: int, error_count: int) -> None:
 def get_stats_summary() -> str:
     s = _load_stats()
     posted_count = len(_load_posted())
+    cache_count = len(_load_candidates())
     return (
         f"\u231a Watch Feeder Stats\n"
         f"Cycles: {s.get('cycles', 0)}\n"
         f"Total posted: {s.get('total_posted', 0)}\n"
         f"Total errors: {s.get('total_errors', 0)}\n"
         f"In dedup DB: {posted_count}\n"
+        f"Cache ready: {cache_count}\n"
         f"Accounts: {len(_load_accounts())}\n"
     )
 
@@ -536,13 +612,129 @@ def _seconds_until_next_window() -> int:
     return int((target - now).total_seconds())
 
 
+# ── Background scanner (24/7, slow) ──
+
+async def candidate_scan_loop(bot) -> None:
+    """Background loop: slowly scan accounts and cache best candidates.
+
+    Runs 24/7 regardless of posting window. Each cycle scans a batch of ~10
+    accounts with delays between them. Full rotation of all 40 accounts
+    happens every ~80 minutes. Candidates are cached for 2 days.
+    """
+    if not settings.watch_feeder_enabled:
+        logger.info("wf_scan: DISABLED")
+        return
+
+    await asyncio.sleep(120)
+
+    accounts = _load_accounts()
+    batch_size = 10
+    cycle = 0
+
+    logger.info("wf_scan: started | %d accounts, batch=%d", len(accounts), batch_size)
+
+    while True:
+        try:
+            from instagram_download import instagram_is_active_check
+
+            if not instagram_is_active_check():
+                logger.info("wf_scan: Instagram inactive, sleeping 30 min")
+                await asyncio.sleep(1800)
+                continue
+
+            # Rotate through accounts
+            start = (cycle * batch_size) % len(accounts)
+            batch = [
+                accounts[(start + i) % len(accounts)]
+                for i in range(batch_size)
+            ]
+
+            logger.info("wf_scan: cycle %d, scanning accounts %d–%d of %d",
+                        cycle, start + 1, start + batch_size, len(accounts))
+
+            # Scan batch slowly
+            new_items = await _scan_batch_slow(batch)
+
+            # Add to cache
+            added = 0
+            if new_items:
+                added = _add_candidates(new_items)
+
+            # Prune old candidates
+            _prune_candidates()
+
+            total_cache = len(_load_candidates())
+            logger.info(
+                "wf_scan: batch done — found %d, added %d new, cache=%d",
+                len(new_items), added, total_cache,
+            )
+
+            cycle += 1
+            # Sleep ~20 min between batches
+            await asyncio.sleep(20 * 60)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("wf_scan error: %s", exc, exc_info=True)
+            await asyncio.sleep(300)
+
+
+async def _scan_batch_slow(usernames: list[str]) -> list[dict]:
+    """Scan a small batch of accounts with delays. Returns fresh candidates."""
+    from instagram_download import _get_client
+
+    posted = _load_posted()
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    cl = _get_client()
+
+    for username in usernames:
+        try:
+            uid = await asyncio.to_thread(cl.user_id_from_username, username)
+            # Small delay between API calls
+            await asyncio.sleep(random.uniform(1.5, 3.0))
+            medias = await asyncio.to_thread(cl.user_medias, uid, 12)
+        except Exception as exc:
+            logger.info("wf_scan: @%s failed: %s", username, exc)
+            await asyncio.sleep(2)
+            continue
+
+        for m in medias:
+            sc = getattr(m, "code", "") or ""
+            if not sc or sc in posted or sc in seen:
+                continue
+            if getattr(m, "media_type", 0) not in (2, 8):
+                continue
+            likes = getattr(m, "like_count", 0) or 0
+            comments = getattr(m, "comment_count", 0) or 0
+            views = getattr(m, "view_count", 0) or 0
+            score = likes + comments * 3 + views * 0.1
+            candidates.append({
+                "shortcode": sc,
+                "username": username,
+                "media_id": m.id,
+                "likes": likes,
+                "comments": comments,
+                "views": int(views),
+                "score": score,
+            })
+            seen.add(sc)
+
+        # Pause between accounts
+        await asyncio.sleep(random.uniform(2.0, 4.0))
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates
+
+
 # ── Main loop ──
 
 async def watch_feed_loop(bot) -> None:
-    """Background loop: post best reels during posting window (7:00–01:00 MSK).
+    """Background loop: post best reels from cache during posting window (7:00–01:00 MSK).
 
     Each hour the loop:
-      1. Scans curated IG accounts for fresh reels
+      1. Pops top candidates from pre-scanned cache
       2. Posts them ONE-BY-ONE with ~7 min gaps between posts
       3. Sleeps until the next hour
     """
@@ -586,17 +778,17 @@ async def watch_feed_loop(bot) -> None:
                 await asyncio.sleep(3600)
                 continue
 
-            # ── 1. Build candidate list for this hour ──
-            try:
-                candidates = await _fetch_from_accounts(top_n=posts_per_hour)
-            except Exception as exc:
-                logger.warning("watch_feed: account discovery failed: %s", exc)
-                candidates = []
+            # ── 1. Pull best candidates from cache ──
+            cache_size = len(_load_candidates())
+            candidates = _pop_top_candidates(posts_per_hour)
 
             if not candidates:
-                logger.info("watch_feed: no candidates this hour, sleeping until next hour")
-                await _sleep_until_next_hour()
+                logger.info("watch_feed: cache empty (%d total, 0 fresh), sleeping 1h", cache_size)
+                await asyncio.sleep(3600)
                 continue
+
+            logger.info("watch_feed: pulled %d from cache (%d remaining)",
+                        len(candidates), len(_load_candidates()))
 
             # ── 2. Spread posts evenly across the hour ──
             posted = _load_posted()

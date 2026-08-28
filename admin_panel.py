@@ -150,13 +150,14 @@ async def cmd_wf_stats(message: Message) -> None:
 
 @router.message(Command("wf_run"), F.chat.type == "private")
 async def cmd_wf_run(message: Message) -> None:
-    """Immediately scan accounts and post best reels (manual override)."""
+    """Immediately post best reels: use cache first, scan if empty."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
     from watch_feeder import (
-        _fetch_from_accounts, _post_single, _load_posted, _mark_posted,
+        _pop_top_candidates, _load_candidates, _fetch_from_accounts,
+        _post_single, _load_posted, _mark_posted,
         _record_cycle, settings as wf_settings,
     )
     from instagram_download import instagram_is_active_check
@@ -168,21 +169,28 @@ async def cmd_wf_run(message: Message) -> None:
         await message.answer("⚠️ Instagram неактивен")
         return
 
-    await message.answer("⚡ Сканирую 40 аккаунтов… (~2 мин)")
-
-    try:
-        items = await _fetch_from_accounts(top_n=wf_settings.wf_posts_per_hour)
-    except Exception as exc:
-        logger.error("wf_run scan failed: %s", exc, exc_info=True)
-        await message.answer(f"❌ Ошибка скана: {exc}")
-        return
+    cache = _load_candidates()
+    if cache:
+        # Use cache
+        items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
+        source = f"📦 из кэша ({len(cache)} шт)"
+    else:
+        # Scan now
+        await message.answer("📦 Кэш пуст, сканирую 40 аккаунтов… (~2 мин)")
+        try:
+            items = await _fetch_from_accounts(top_n=wf_settings.wf_posts_per_hour)
+        except Exception as exc:
+            logger.error("wf_run scan failed: %s", exc, exc_info=True)
+            await message.answer(f"❌ Ошибка скана: {exc}")
+            return
+        source = "🔍 прямой скан"
 
     if not items:
-        await message.answer("❌ Не нашёл свежих reels\nВозможно Instagram сессия истекла или аккаунты недоступны")
+        await message.answer("❌ Нет кандидатов")
         return
 
-    # Show candidates list first
-    lines = [f"📋 Найдено {len(items)} кандидатов:"]
+    # Show candidates list
+    lines = [f"{source} — {len(items)} кандидатов:"]
     for i, item in enumerate(items[:8], 1):
         lines.append(f"{i}. @{item.get('username', '?')} — ❤️{item.get('likes', 0)} 📹{item.get('views', 0)}")
     await message.answer("\n".join(lines))
@@ -243,8 +251,8 @@ async def cmd_wf(message: Message) -> None:
             f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
             f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
             "Команды:\n"
-            "/wf_run — сканировать и постить сейчас\n"
-            "/wf seiko — лучший reel по бренду\n"
+            "/wf_run — постить сейчас (из кэша)\n"
+            "/wf seiko — лучший reel Seiko\n"
             "/wf rolex — лучший reel Rolex\n"
             "/wf omega — лучший reel Omega\n"
             "/wf_stats — статистика"
