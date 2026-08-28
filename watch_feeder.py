@@ -517,7 +517,7 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Send Instagram link + caption to all chats. Returns True if sent."""
+    """Send Instagram link + caption as single message to all chats."""
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
 
@@ -527,13 +527,12 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
         item = {**item, **{k: v for k, v in info.items() if v}}
 
     caption = _build_caption(item)
+    # Combine link + caption into one message
+    text = f"🔗 {link}\n\n{caption}"
     sent = False
     for cid in chat_ids:
         try:
-            # 1) Send link first — Telegram will embed preview
-            await bot.send_message(chat_id=cid, text=f"🔗 {link}")
-            # 2) Then send caption
-            await bot.send_message(chat_id=cid, text=caption)
+            await bot.send_message(chat_id=cid, text=text)
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
