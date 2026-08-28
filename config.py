@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     # --- Watch Feeder: автопостинг часов из Instagram ---
     watch_feeder_enabled: bool = Field(default=False, alias="WATCH_FEEDER_ENABLED")
     watch_feeder_chat_ids_raw: str = Field(default="", alias="WATCH_FEEDER_CHAT_IDS")
-    watch_feeder_interval_hours: int = Field(default=6, alias="WATCH_FEEDER_INTERVAL_HOURS")
+    watch_feeder_interval_hours: int = Field(default=1, alias="WATCH_FEEDER_INTERVAL_HOURS")
+    wf_post_start_hour: int = Field(default=7, alias="WF_POST_START_HOUR")
+    wf_post_end_hour: int = Field(default=1, alias="WF_POST_END_HOUR")
+    wf_posts_per_hour: int = Field(default=8, alias="WF_POSTS_PER_HOUR")
 
     @field_validator("watch_feeder_enabled", mode="before")
     @classmethod

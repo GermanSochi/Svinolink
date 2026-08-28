@@ -153,7 +153,9 @@ async def cmd_wf(message: Message) -> None:
         f"{get_stats_summary()}\n"
         f"Status: {status}\n"
         f"Chat IDs: {chats}\n"
-        f"Interval: {interval}h\n\n"
+        f"Interval: {interval}h\n"
+        f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
+        f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
         "/wf_run — запустить цикл сейчас\n"
         "/wf_add URL — добавить ссылку в очередь\n"
         "/wf_queue — показать очередь\n"
@@ -234,14 +236,14 @@ async def cmd_wf_clear(message: Message) -> None:
 
 @router.message(Command("wf_run"), F.chat.type == "private")
 async def cmd_wf_run(message: Message) -> None:
-    """Immediately run one watch feeder cycle (2 posts from queue)."""
+    """Immediately run one watch feeder cycle (manual override, posts_per_hour items)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
     from watch_feeder import (
         load_queue, pop_queue_batch, _process_items, _record_cycle,
-        _notify_admin, settings as wf_settings,
+        _notify_admin, _in_posting_window, settings as wf_settings,
     )
     from instagram_download import instagram_is_active_check
 
@@ -256,12 +258,15 @@ async def cmd_wf_run(message: Message) -> None:
         return
 
     queue = load_queue()
+    in_window = _in_posting_window()
+    window_tag = "✅ в окне" if in_window else "⏰ вне окна (ручной запуск)"
     await message.answer(
-        f"🔄 Запускаю тестовый цикл...\n"
-        f"Очередь: {len(queue)} | Чаты: {wf_settings.watch_feeder_chat_ids}"
+        f"⚡ Запускаю цикл ({window_tag})...\n"
+        f"Очередь: {len(queue)} | Чаты: {wf_settings.watch_feeder_chat_ids}\n"
+        f"Лимит: {wf_settings.wf_posts_per_hour} постов/час"
     )
 
-    batch = pop_queue_batch(max_items=2)
+    batch = pop_queue_batch(max_items=wf_settings.wf_posts_per_hour)
     if not batch:
         await message.answer("❌ Очередь пуста!")
         return

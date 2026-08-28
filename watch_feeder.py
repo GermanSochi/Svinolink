@@ -8,6 +8,7 @@ Features:
   * Multiple download methods: instagrapi -> yt-dlp fallback.
   * Admin notification: summary after each cycle.
   * Dedup via data/watch_posted.json (last 500 shortcodes).
+  * Posting window: 7:00–01:00 MSK, N posts per hour.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from config import settings
@@ -378,7 +380,7 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
     for username in accounts:
         try:
             uid = await asyncio.to_thread(cl.user_id_from_username, username)
-            medias = await asyncio.to_thread(cl.user_medias, uid, 6)
+            medias = await asyncio.to_thread(cl.user_medias, uid, 12)
         except Exception as exc:
             logger.debug("watch_feed: fetch @%s failed: %s", username, exc)
             continue
@@ -502,10 +504,42 @@ def seed_queue_from_links_file(filepath: str | Path) -> int:
     return add_to_queue(shortcodes, source="links_file")
 
 
+# ── Time helpers ──
+
+_MSK = timezone(timedelta(hours=3))
+
+
+def _now_msk() -> datetime:
+    return datetime.now(_MSK)
+
+
+def _in_posting_window() -> bool:
+    """Return True if current MSK hour is in the posting window [start, end)."""
+    h = _now_msk().hour
+    start = settings.wf_post_start_hour  # 7
+    end = settings.wf_post_end_hour      # 1
+    if start <= end:
+        # same-day window, e.g. 9..17
+        return start <= h < end
+    else:
+        # overnight window, e.g. 7..1 → 7..23 + 0..0
+        return h >= start or h < end
+
+
+def _seconds_until_next_window() -> int:
+    """Seconds until the next posting window starts."""
+    now = _now_msk()
+    start = settings.wf_post_start_hour
+    target = now.replace(hour=start, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return int((target - now).total_seconds())
+
+
 # ── Main loop ──
 
 async def watch_feed_loop(bot) -> None:
-    """Background loop: process queue first, then account discovery."""
+    """Background loop: post 5-10 items/hour during posting window (7:00–01:00 MSK)."""
     if not settings.watch_feeder_enabled:
         logger.info("watch_feed: DISABLED")
         return
@@ -517,13 +551,31 @@ async def watch_feed_loop(bot) -> None:
     await asyncio.sleep(120)
 
     interval = settings.watch_feeder_interval_hours * 3600
+    posts_per_cycle = settings.wf_posts_per_hour
     logger.info(
-        "watch_feed: started | interval=%dh | chats=%s",
-        settings.watch_feeder_interval_hours, chat_ids,
+        "watch_feed: started | interval=%dh | posts_per_cycle=%d | window=%02d:00–%02d:00 MSK | chats=%s",
+        settings.watch_feeder_interval_hours,
+        posts_per_cycle,
+        settings.wf_post_start_hour,
+        settings.wf_post_end_hour,
+        chat_ids,
     )
 
     while True:
         try:
+            # ── Check posting window ──
+            if not _in_posting_window():
+                wait = _seconds_until_next_window()
+                logger.info(
+                    "watch_feed: outside window (%02d:00 MSK), sleeping %d min until %02d:00",
+                    _now_msk().hour, wait // 60, settings.wf_post_start_hour,
+                )
+                # Sleep in 60s chunks so we can wake up promptly
+                while wait > 0:
+                    await asyncio.sleep(min(wait, 60))
+                    wait -= 60
+                continue
+
             from instagram_download import instagram_is_active_check
 
             if not instagram_is_active_check():
@@ -534,8 +586,8 @@ async def watch_feed_loop(bot) -> None:
             sent = 0
             errors = 0
 
-            # 1. Process queue first (manual / imported shortcodes)
-            queue_batch = pop_queue_batch(max_items=3)
+            # 1. Process queue first (manual / imported shortcodes) — take more per cycle
+            queue_batch = pop_queue_batch(max_items=posts_per_cycle)
             if queue_batch:
                 logger.info("watch_feed: processing %d queue items", len(queue_batch))
                 queue_items = [
@@ -547,11 +599,11 @@ async def watch_feed_loop(bot) -> None:
                 sent += s
                 errors += e
 
-            # 2. Account discovery (only if queue is empty or we still have capacity)
-            queue_left = len(load_queue())
-            if sent < 3:
+            # 2. Account discovery — fill remaining slots with best reels sorted by engagement
+            remaining = posts_per_cycle - sent
+            if remaining > 0:
                 try:
-                    candidates = await _fetch_from_accounts(top_n=3 - sent)
+                    candidates = await _fetch_from_accounts(top_n=remaining)
                     if candidates:
                         s, e = await _process_items(bot, chat_ids, candidates)
                         sent += s
@@ -565,10 +617,18 @@ async def watch_feed_loop(bot) -> None:
             if sent > 0 or errors > 0:
                 await _notify_admin(bot, sent, errors, queue_left)
 
+            # Sleep until next hour within the window
+            now = _now_msk()
+            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            sleep_sec = max(10, int((next_hour - now).total_seconds()))
+            logger.info("watch_feed: cycle done (sent=%d), sleeping %d min", sent, sleep_sec // 60)
+            await asyncio.sleep(sleep_sec)
+
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("watch_feed loop error: %s", exc, exc_info=True)
-
-        await asyncio.sleep(interval)
+            await asyncio.sleep(interval)
 
 
 
