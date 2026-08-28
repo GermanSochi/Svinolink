@@ -154,6 +154,7 @@ async def cmd_wf(message: Message) -> None:
         f"Status: {status}\n"
         f"Chat IDs: {chats}\n"
         f"Interval: {interval}h\n\n"
+        "/wf_run — запустить цикл сейчас\n"
         "/wf_add URL — добавить ссылку в очередь\n"
         "/wf_queue — показать очередь\n"
         "/wf_stats — статистика\n"
@@ -229,3 +230,54 @@ async def cmd_wf_clear(message: Message) -> None:
     from watch_feeder import save_queue
     save_queue([])
     await message.answer("Очередь очищена")
+
+
+@router.message(Command("wf_run"), F.chat.type == "private")
+async def cmd_wf_run(message: Message) -> None:
+    """Immediately run one watch feeder cycle (2 posts from queue)."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import (
+        load_queue, pop_queue_batch, _process_items, _record_cycle,
+        _notify_admin, settings as wf_settings,
+    )
+    from instagram_download import instagram_is_active_check
+
+    if not wf_settings.watch_feeder_enabled:
+        await message.answer("⚠️ Watch Feeder выключен (WATCH_FEEDER_ENABLED=0)")
+        return
+    if not wf_settings.watch_feeder_chat_ids:
+        await message.answer("⚠️ Нет chat IDs (WATCH_FEEDER_CHAT_IDS)")
+        return
+    if not instagram_is_active_check():
+        await message.answer("⚠️ Instagram неактивен (нет cookies/сессии)")
+        return
+
+    queue = load_queue()
+    await message.answer(
+        f"🔄 Запускаю тестовый цикл...\n"
+        f"Очередь: {len(queue)} | Чаты: {wf_settings.watch_feeder_chat_ids}"
+    )
+
+    batch = pop_queue_batch(max_items=2)
+    if not batch:
+        await message.answer("❌ Очередь пуста!")
+        return
+
+    items = [
+        {"shortcode": e["shortcode"], "username": "", "likes": 0,
+         "comments": 0, "views": 0}
+        for e in batch
+    ]
+
+    bot = message.bot
+    chat_ids = wf_settings.watch_feeder_chat_ids
+    sent, errors = await _process_items(bot, chat_ids, items)
+    queue_left = len(load_queue())
+    _record_cycle(sent, errors)
+
+    result = f"✅ Готово!\nОтправлено: {sent}\nОшибки: {errors}\nОсталось в очереди: {queue_left}"
+    await message.answer(result)
+    logger.info("wf_run: sent=%d errors=%d queue_left=%d", sent, errors, queue_left)

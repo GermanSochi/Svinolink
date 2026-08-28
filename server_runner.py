@@ -77,6 +77,7 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
                 if is_pool_ready()
                 else ("configured" if settings.supabase_database_url.strip() else "off")
             ),
+            "watch_feeder": "on" if settings.watch_feeder_enabled else "off",
         }
         return web.Response(
             text=json.dumps(payload, ensure_ascii=False),
