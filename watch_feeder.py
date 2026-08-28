@@ -809,20 +809,28 @@ async def watch_feed_loop(bot) -> None:
                     wait -= 60
                 continue
 
-            from instagram_download import instagram_is_active_check
-
-            if not instagram_is_active_check():
-                logger.info("watch_feed: Instagram inactive, sleeping 1h")
-                await asyncio.sleep(3600)
-                continue
-
             # ── 1. Pull best candidates from cache ──
             cache_size = len(_load_candidates())
             candidates = _pop_top_candidates(posts_per_hour)
 
             if not candidates:
-                logger.info("watch_feed: cache empty (%d total, 0 fresh), sleeping 1h", cache_size)
-                await asyncio.sleep(3600)
+                # Cache empty — try DuckDuckGo discovery
+                logger.info("watch_feed: cache empty (%d total), trying DuckDuckGo", cache_size)
+                try:
+                    from watch_discovery import search_reels
+                    loop = asyncio.get_event_loop()
+                    results = await loop.run_in_executor(
+                        None, lambda: search_reels(max_results_per_query=10)
+                    )
+                    added = _add_candidates(results)
+                    logger.info("watch_feed: DDG found %d, added %d new to cache", len(results), added)
+                    candidates = _pop_top_candidates(posts_per_hour)
+                except Exception as exc:
+                    logger.warning("watch_feed: DDG discovery failed: %s", exc)
+
+            if not candidates:
+                logger.info("watch_feed: still no candidates, sleeping 30 min")
+                await asyncio.sleep(1800)
                 continue
 
             logger.info("watch_feed: pulled %d from cache (%d remaining)",
