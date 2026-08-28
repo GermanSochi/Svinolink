@@ -517,22 +517,13 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Send Instagram link + caption as single message to all chats."""
+    """Send Instagram link — Svinolink bot auto-downloads and posts the video."""
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
-
-    # Try to enrich with media info (caption, engagement)
-    info = await asyncio.to_thread(_get_media_info, sc)
-    if info:
-        item = {**item, **{k: v for k, v in info.items() if v}}
-
-    caption = _build_caption(item)
-    # Combine link + caption into one message
-    text = f"🔗 {link}\n\n{caption}"
     sent = False
     for cid in chat_ids:
         try:
-            await bot.send_message(chat_id=cid, text=text)
+            await bot.send_message(chat_id=cid, text=link)
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
