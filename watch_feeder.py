@@ -565,12 +565,7 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Download reel video and send it directly to channel(s).
-
-    Works exactly like when a user posts a link in chat:
-    bot downloads the video and sends it as a video message.
-    Falls back to text link only if download completely fails.
-    """
+    """Download reel and send as video. Skip silently if download fails."""
     from instagram_download import (
         download_instagram_video, remove_file,
         DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
@@ -585,42 +580,33 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
     try:
         logger.info("watch_feed: downloading %s", sc)
         async with _download_semaphore:
-            file_path, caption = await asyncio.wait_for(
+            file_path, _ = await asyncio.wait_for(
                 asyncio.to_thread(download_instagram_video, link),
                 timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
             )
 
-        size = file_path.stat().st_size
-        if size > TELEGRAM_MAX_BYTES:
-            logger.warning("watch_feed: %s too large (%d bytes)", sc, size)
+        if file_path.stat().st_size > TELEGRAM_MAX_BYTES:
+            logger.warning("watch_feed: %s too large", sc)
             remove_file(file_path)
-            file_path = None
-    except asyncio.TimeoutError:
-        logger.warning("watch_feed: download timeout for %s", sc)
-        remove_file(file_path)
-        file_path = None
+            return False
     except Exception as exc:
-        logger.warning("watch_feed: download failed for %s: %s", sc, exc)
+        logger.warning("watch_feed: download failed %s: %s", sc, exc)
         remove_file(file_path)
-        file_path = None
+        return False
 
     sent = False
     for cid in chat_ids:
         try:
-            if file_path:
-                await bot.send_video(
-                    chat_id=cid,
-                    video=FSInputFile(file_path),
-                    supports_streaming=True,
-                )
-            else:
-                await bot.send_message(chat_id=cid, text=link)
+            await bot.send_video(
+                chat_id=cid,
+                video=FSInputFile(file_path),
+                supports_streaming=True,
+            )
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
 
-    if file_path:
-        remove_file(file_path)
+    remove_file(file_path)
     return sent
 
 
