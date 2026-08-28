@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     watch_feeder_chat_ids_raw: str = Field(default="", alias="WATCH_FEEDER_CHAT_IDS")
     watch_feeder_interval_hours: int = Field(default=6, alias="WATCH_FEEDER_INTERVAL_HOURS")
 
+    @field_validator("watch_feeder_enabled", mode="before")
+    @classmethod
+    def parse_watch_feeder_enabled(cls, v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        s = str(v).strip().lower()
+        if s in {"", "0", "false", "no", "off"}:
+            return False
+        return s in {"1", "true", "yes", "on"}
+
     @field_validator("instagram_paused", mode="before")
     @classmethod
     def parse_instagram_paused(cls, v: object) -> bool:
