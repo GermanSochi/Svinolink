@@ -137,34 +137,6 @@ async def cmd_admin_reset(message: Message) -> None:
 
 # ── Watch Feeder admin commands ──────────────────────────────
 
-@router.message(Command("wf"), F.chat.type == "private")
-async def cmd_wf(message: Message) -> None:
-    """Watch Feeder status + help."""
-    if not message.from_user or not is_admin_user(
-        message.from_user.id, message.from_user.username
-    ):
-        return
-    from watch_feeder import get_stats_summary, settings as wf_settings
-    enabled = wf_settings.watch_feeder_enabled
-    chats = wf_settings.watch_feeder_chat_ids
-    interval = wf_settings.watch_feeder_interval_hours
-    status = "ON" if enabled else "OFF"
-    await message.answer(
-        f"{get_stats_summary()}\n"
-        f"Status: {status}\n"
-        f"Chat IDs: {chats}\n"
-        f"Interval: {interval}h\n"
-        f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
-        f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
-        "/wf — постить случайный reel\n"
-        "/wf seiko — лучший reel по бренду\n"
-        "/wf_run — запустить полный цикл\n"
-        "/wf_queue — показать очередь\n"
-        "/wf_stats — статистика\n"
-        "/wf_clear — очистить очередь"
-    )
-
-
 @router.message(Command("wf_queue"), F.chat.type == "private")
 async def cmd_wf_queue(message: Message) -> None:
     """Show current watch feeder queue."""
@@ -301,42 +273,39 @@ async def cmd_wf(message: Message) -> None:
     parts = text.split(maxsplit=1)
     keyword = parts[1].strip().lower() if len(parts) > 1 else ""
 
-    if keyword:
-        await message.answer(f"🔍 Ищу лучший reel по «{keyword}»...")
-        try:
-            candidates = await _fetch_keyword(keyword, top_n=10)
-        except Exception as exc:
-            await message.answer(f"❌ Ошибка: {exc}")
-            return
-        if not candidates:
-            await message.answer(f"❌ Ничего не нашёл по «{keyword}»")
-            return
-        # Pick best by likes (engagement)
-        posted = _load_posted()
-        fresh = [c for c in candidates if c["shortcode"] not in posted]
-        if not fresh:
-            await message.answer(f"❌ Все {len(candidates)} по «{keyword}» уже постились")
-            return
-        chosen = max(fresh, key=lambda x: x.get("likes", 0))
-        label = f"«{keyword}» (лучший из {len(fresh)})"
-    else:
-        await message.answer("🔍 Сканирую аккаунты...")
-        try:
-            candidates = await _fetch_from_accounts(top_n=15)
-        except Exception as exc:
-            await message.answer(f"❌ Ошибка скана: {exc}")
-            return
-        if not candidates:
-            await message.answer("❌ Не нашёл ни одного нового reel")
-            return
-        posted = _load_posted()
-        fresh = [c for c in candidates if c["shortcode"] not in posted]
-        if not fresh:
-            await message.answer(f"❌ Все {len(candidates)} кандидатов уже постились")
-            return
-        import random
-        chosen = random.choice(fresh)
-        label = f"случайный из {len(fresh)}"
+    if not keyword:
+        # /wf without args → show status + help
+        from watch_feeder import get_stats_summary, settings as wf_settings
+        await message.answer(
+            f"{get_stats_summary()}\n"
+            f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
+            f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
+            "Команды:\n"
+            "/wf brand — лучший reel по бренду\n"
+            "/wf_run — полный цикл (8 постов)\n"
+            "/wf_queue — очередь\n"
+            "/wf_stats — статистика\n"
+            "/wf_clear — очистить очередь"
+        )
+        return
+
+    await message.answer(f"🔍 Ищу лучший reel по «{keyword}»...")
+    try:
+        candidates = await _fetch_keyword(keyword, top_n=10)
+    except Exception as exc:
+        await message.answer(f"❌ Ошибка: {exc}")
+        return
+    if not candidates:
+        await message.answer(f"❌ Ничего не нашёл по «{keyword}»")
+        return
+    # Pick best by likes
+    posted = _load_posted()
+    fresh = [c for c in candidates if c["shortcode"] not in posted]
+    if not fresh:
+        await message.answer(f"❌ Все {len(candidates)} по «{keyword}» уже постились")
+        return
+    chosen = max(fresh, key=lambda x: x.get("likes", 0))
+    label = f"«{keyword}» (лучший из {len(fresh)})"
 
     bot = message.bot
     chat_ids = settings.watch_feeder_chat_ids
