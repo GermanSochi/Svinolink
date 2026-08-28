@@ -157,7 +157,7 @@ async def cmd_wf_run(message: Message) -> None:
         return
     from watch_feeder import (
         _fetch_from_accounts, _post_single, _load_posted, _mark_posted,
-        _record_cycle, _in_posting_window, settings as wf_settings,
+        _record_cycle, settings as wf_settings,
     )
     from instagram_download import instagram_is_active_check
 
@@ -168,19 +168,24 @@ async def cmd_wf_run(message: Message) -> None:
         await message.answer("⚠️ Instagram неактивен")
         return
 
-    in_window = _in_posting_window()
-    window_tag = "✅ в окне" if in_window else "⏰ вне окна"
-    await message.answer(f"⚡ Сканирую аккаунты ({window_tag})...")
+    await message.answer("⚡ Сканирую 40 аккаунтов… (~2 мин)")
 
     try:
         items = await _fetch_from_accounts(top_n=wf_settings.wf_posts_per_hour)
     except Exception as exc:
+        logger.error("wf_run scan failed: %s", exc, exc_info=True)
         await message.answer(f"❌ Ошибка скана: {exc}")
         return
 
     if not items:
-        await message.answer("❌ Не нашёл свежих reels")
+        await message.answer("❌ Не нашёл свежих reels\nВозможно Instagram сессия истекла или аккаунты недоступны")
         return
+
+    # Show candidates list first
+    lines = [f"📋 Найдено {len(items)} кандидатов:"]
+    for i, item in enumerate(items[:8], 1):
+        lines.append(f"{i}. @{item.get('username', '?')} — ❤️{item.get('likes', 0)} 📹{item.get('views', 0)}")
+    await message.answer("\n".join(lines))
 
     bot = message.bot
     chat_ids = wf_settings.watch_feeder_chat_ids
@@ -188,7 +193,7 @@ async def cmd_wf_run(message: Message) -> None:
     sent = 0
     errors = 0
 
-    for item in items:
+    for i, item in enumerate(items):
         sc = item.get("shortcode", "")
         if not sc or sc in posted:
             continue
@@ -196,6 +201,7 @@ async def cmd_wf_run(message: Message) -> None:
         if ok:
             _mark_posted(posted, sc)
             sent += 1
+            logger.info("wf_run: [%d/%d] posted %s", i + 1, len(items), sc)
         else:
             errors += 1
 
@@ -237,8 +243,10 @@ async def cmd_wf(message: Message) -> None:
             f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
             f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
             "Команды:\n"
-            "/wf brand — лучший reel по бренду\n"
-            "/wf_run — полный цикл (8 постов)\n"
+            "/wf_run — сканировать и постить сейчас\n"
+            "/wf seiko — лучший reel по бренду\n"
+            "/wf rolex — лучший reel Rolex\n"
+            "/wf omega — лучший reel Omega\n"
             "/wf_stats — статистика"
         )
         return

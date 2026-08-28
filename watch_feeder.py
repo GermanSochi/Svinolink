@@ -329,13 +329,15 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
     candidates = []
     seen: set[str] = set()
     cl = _get_client()
+    failed = 0
 
     for username in accounts:
         try:
             uid = await asyncio.to_thread(cl.user_id_from_username, username)
             medias = await asyncio.to_thread(cl.user_medias, uid, 12)
         except Exception as exc:
-            logger.debug("watch_feed: fetch @%s failed: %s", username, exc)
+            failed += 1
+            logger.info("watch_feed: fetch @%s failed: %s", username, exc)
             continue
 
         for m in medias:
@@ -359,8 +361,9 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
             })
             seen.add(sc)
 
+    logger.info("watch_feed: %d candidates from %d accounts (%d failed, %d posted-dedup)",
+                len(candidates), len(accounts), failed, len(posted))
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    logger.info("watch_feed: %d candidates from %d accounts", len(candidates), len(accounts))
     return candidates[:top_n]
 
 
@@ -389,7 +392,7 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
             uid = await asyncio.to_thread(cl.user_id_from_username, username)
             medias = await asyncio.to_thread(cl.user_medias, uid, 12)
         except Exception as exc:
-            logger.debug("watch_feed: fetch @%s failed: %s", username, exc)
+            logger.info("watch_feed: kw fetch @%s failed: %s", username, exc)
             continue
 
         for m in medias:
