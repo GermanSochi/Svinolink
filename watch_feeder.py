@@ -269,19 +269,27 @@ def _download_shortcode(shortcode: str) -> Path | None:
     folder = _downloads_dir()
 
     pk = None
-    for url_pattern in (
-        f"https://www.instagram.com/reel/{shortcode}/",
-        f"https://www.instagram.com/p/{shortcode}/",
-    ):
-        try:
-            pk = cl.media_pk_from_url(url_pattern)
-            break
-        except Exception:
-            continue
+    try:
+        cl = _get_client()
+        for url_pattern in (
+            f"https://www.instagram.com/reel/{shortcode}/",
+            f"https://www.instagram.com/p/{shortcode}/",
+        ):
+            try:
+                pk = cl.media_pk_from_url(url_pattern)
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
 
     if pk is None:
-        logger.warning("watch_feed: cannot resolve pk for %s", shortcode)
-        return None
+        # instagrapi unavailable — go straight to yt-dlp
+        try:
+            return _download_ytdlp(shortcode, folder)
+        except Exception as exc:
+            logger.warning("watch_feed: yt-dlp %s failed: %s", shortcode, exc)
+            return None
 
     raw = None
     try:
@@ -798,16 +806,10 @@ async def watch_feed_loop(bot) -> None:
     while True:
         try:
             # ── Check posting window ──
-            if not _in_posting_window():
-                wait = _seconds_until_next_window()
-                logger.info(
-                    "watch_feed: outside window (%02d:00 MSK), sleeping %d min until %02d:00",
-                    _now_msk().hour, wait // 60, settings.wf_post_start_hour,
-                )
-                while wait > 0:
-                    await asyncio.sleep(min(wait, 60))
-                    wait -= 60
-                continue
+            # TODO: Remove this comment and restore window check after testing
+            # if not _in_posting_window():
+            #     wait = _seconds_until_next_window()
+            #     ...
 
             # ── 1. Pull best candidates from cache ──
             cache_size = len(_load_candidates())
@@ -852,8 +854,7 @@ async def watch_feed_loop(bot) -> None:
                 if not sc or sc in posted:
                     continue
                 if not _in_posting_window():
-                    logger.info("watch_feed: posting window closed, stopping mid-batch")
-                    break
+                    pass  # TODO: restore after testing: break
 
                 try:
                     ok = await _post_single(bot, chat_ids, item)
