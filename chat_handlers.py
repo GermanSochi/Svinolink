@@ -8,7 +8,7 @@ import io
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 import ai_quota
 from config import settings
@@ -160,9 +160,6 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     logger.info("IG clean_url=%s", clean_url)
 
-    _AD_TEXT = "💰 Донаты приветствуются"
-    _AD_LINK = "https://clck.ru/3UaRGo"
-
     MAX_DOWNLOAD_RETRIES = 3
     RETRY_DELAY_SEC = 5
     last_error: Exception | None = None
@@ -188,32 +185,18 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             sent_msg = None
             for attempt in range(2):
                 try:
-                    video_caption = f"{_AD_TEXT}\n{_AD_LINK}"
-
+                    sent_msg = await message.answer_video(
+                        video=FSInputFile(file_path),
+                        reply_to_message_id=message.message_id,
+                        supports_streaming=True,
+                    )
                     if caption.strip():
-                        sent_msg = await message.answer_video(
-                            video=FSInputFile(file_path),
-                            caption=video_caption,
-                            reply_to_message_id=message.message_id,
-                            supports_streaming=True,
-                        )
                         cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
                         _ig_caption_cache[cache_key] = caption
                         if len(_ig_caption_cache) > 100:
                             old_keys = list(_ig_caption_cache.keys())[:50]
                             for k in old_keys:
                                 _ig_caption_cache.pop(k, None)
-                        kb = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="📝", callback_data=f"igtxt:{cache_key}")]
-                        ])
-                        await sent_msg.edit_reply_markup(reply_markup=kb)
-                    else:
-                        sent_msg = await message.answer_video(
-                            video=FSInputFile(file_path),
-                            caption=video_caption,
-                            reply_to_message_id=message.message_id,
-                            supports_streaming=True,
-                        )
                     break
                 except Exception as e:
                     if "timeout" in str(e).lower() and attempt < 1:
