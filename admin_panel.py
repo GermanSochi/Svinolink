@@ -157,6 +157,7 @@ async def cmd_wf(message: Message) -> None:
         f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
         f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
         "/wf_run — запустить цикл сейчас\n"
+        "/wf — постить 1 случайный reel\n"
         "/wf_add URL — добавить ссылку в очередь\n"
         "/wf_queue — показать очередь\n"
         "/wf_stats — статистика\n"
@@ -243,7 +244,8 @@ async def cmd_wf_run(message: Message) -> None:
         return
     from watch_feeder import (
         load_queue, pop_queue_batch, _process_items, _record_cycle,
-        _notify_admin, _in_posting_window, settings as wf_settings,
+        _notify_admin, _in_posting_window, _fetch_from_accounts,
+        settings as wf_settings,
     )
     from instagram_download import instagram_is_active_check
 
@@ -266,16 +268,27 @@ async def cmd_wf_run(message: Message) -> None:
         f"Лимит: {wf_settings.wf_posts_per_hour} постов/час"
     )
 
+    # Build items: queue first, then account discovery
+    items: list[dict] = []
     batch = pop_queue_batch(max_items=wf_settings.wf_posts_per_hour)
-    if not batch:
-        await message.answer("❌ Очередь пуста!")
-        return
+    if batch:
+        items.extend(
+            {"shortcode": e["shortcode"], "username": "", "likes": 0,
+             "comments": 0, "views": 0}
+            for e in batch
+        )
 
-    items = [
-        {"shortcode": e["shortcode"], "username": "", "likes": 0,
-         "comments": 0, "views": 0}
-        for e in batch
-    ]
+    remaining = wf_settings.wf_posts_per_hour - len(items)
+    if remaining > 0:
+        try:
+            discovered = await _fetch_from_accounts(top_n=remaining)
+            items.extend(discovered)
+        except Exception as exc:
+            await message.answer(f"⚠️ Account scan error: {exc}")
+
+    if not items:
+        await message.answer("❌ Нет кандидатов (очередь пуста + скан ничего не дал)")
+        return
 
     bot = message.bot
     chat_ids = wf_settings.watch_feeder_chat_ids
@@ -286,3 +299,62 @@ async def cmd_wf_run(message: Message) -> None:
     result = f"✅ Готово!\nОтправлено: {sent}\nОшибки: {errors}\nОсталось в очереди: {queue_left}"
     await message.answer(result)
     logger.info("wf_run: sent=%d errors=%d queue_left=%d", sent, errors, queue_left)
+
+
+@router.message(Command("wf"), F.chat.type == "private")
+async def cmd_wf(message: Message) -> None:
+    """Post one random reel from accounts (quick one-shot)."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from instagram_download import instagram_is_active_check
+    from watch_feeder import (
+        _fetch_from_accounts, _post_single, _load_posted, _mark_posted,
+        _record_cycle,
+    )
+
+    if not settings.watch_feeder_enabled:
+        await message.answer("⚠️ Watch Feeder выключен")
+        return
+    if not instagram_is_active_check():
+        await message.answer("⚠️ Instagram неактивен")
+        return
+
+    await message.answer("🔍 Сканирую аккаунты...")
+
+    try:
+        candidates = await _fetch_from_accounts(top_n=15)
+    except Exception as exc:
+        await message.answer(f"❌ Ошибка скана: {exc}")
+        return
+
+    if not candidates:
+        await message.answer("❌ Не нашёл ни одного нового reel")
+        return
+
+    posted = _load_posted()
+    # Filter out already posted
+    fresh = [c for c in candidates if c["shortcode"] not in posted]
+    if not fresh:
+        await message.answer(f"❌ Все {len(candidates)} кандидатов уже постились")
+        return
+
+    import random
+    chosen = random.choice(fresh)
+    bot = message.bot
+    chat_ids = settings.watch_feeder_chat_ids
+
+    ok = await _post_single(bot, chat_ids, chosen)
+    if ok:
+        _mark_posted(posted, chosen["shortcode"])
+        _record_cycle(1, 0)
+        sc = chosen["shortcode"]
+        score = chosen.get("score", 0)
+        await message.answer(
+            f"✅ Постнуто! @{chosen.get('username', '?')}\n"
+            f"score={score:.0f} | /{sc}"
+        )
+    else:
+        _record_cycle(0, 1)
+        await message.answer(f"❌ Не удалось отправить {chosen['shortcode']}")
