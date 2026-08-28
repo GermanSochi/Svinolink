@@ -15,8 +15,8 @@ from bot_startup import configure_bot
 from ai_quota import HOURLY_LIMIT
 from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
 from chat_style import daily_style_loop
-from watch_feeder import watch_feed_loop
-from config import settings
+from watch_feeder import seed_queue_from_links_file, watch_feed_loop
+from config import BASE_DIR, settings
 from instagram_download import init_instagram_downloader
 from game_init import init_game_db
 from webapp_server import STATIC, register_miniapp_routes
@@ -145,6 +145,13 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
             app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
             app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
+            # Seed queue from links file on startup if queue is empty
+            if settings.watch_feeder_enabled:
+                links_file = BASE_DIR / "watch_feeder_links.txt"
+                if links_file.is_file():
+                    added = seed_queue_from_links_file(links_file)
+                    if added:
+                        logger.info("watch_feed: seeded %d shortcodes from links file", added)
             app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
             app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
             logger.info("Listening POST %s | Mini App %s | self-ping every %ss",
@@ -185,6 +192,13 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
             app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
             app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
             app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
+            # Seed queue from links file on startup if queue is empty
+            if settings.watch_feeder_enabled:
+                links_file = BASE_DIR / "watch_feeder_links.txt"
+                if links_file.is_file():
+                    added = seed_queue_from_links_file(links_file)
+                    if added:
+                        logger.info("watch_feed: seeded %d shortcodes from links file", added)
             app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
             app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
             logger.info("Polling mode | Mini App %s | self-ping every %ss",
