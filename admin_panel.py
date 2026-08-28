@@ -151,7 +151,7 @@ async def cmd_wf_stats(message: Message) -> None:
 
 @router.message(Command("wf_run"), F.chat.type == "private")
 async def cmd_wf_run(message: Message) -> None:
-    """Immediately post best reels: use cache first, DuckDuckGo discovery if empty."""
+    """Immediately post best reels from cache or built-in seed (silent)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
@@ -169,10 +169,8 @@ async def cmd_wf_run(message: Message) -> None:
     cache = _load_candidates()
     if cache:
         items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
-        source = f"📦 из кэша ({len(cache)} шт)"
     else:
         # DuckDuckGo discovery
-        await message.answer("🔍 Кэш пуст, ищу через DuckDuckGo…")
         try:
             from watch_discovery import search_reels
             results = await asyncio.wait_for(
@@ -181,31 +179,20 @@ async def cmd_wf_run(message: Message) -> None:
                 ),
                 timeout=60,
             )
-            added = _add_candidates(results)
+            _add_candidates(results)
             items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
-            source = f"🌐 DuckDuckGo: нашёл {len(results)}, добавил {added} новых"
-        except asyncio.TimeoutError:
-            results = []
-        except Exception as exc:
-            logger.error("wf_run discovery failed: %s", exc, exc_info=True)
+        except Exception:
             results = []
 
-        if not results:
+        if not items:
             # Fallback: built-in seed
             from watch_feeder import _seed_cache_if_empty
-            seeded = _seed_cache_if_empty()
+            _seed_cache_if_empty()
             items = _pop_top_candidates(wf_settings.wf_posts_per_hour)
-            source = f"📦 Built-in seed: {seeded} reels, кэш {len(_load_candidates())}"
 
     if not items:
         await message.answer("❌ Нет кандидатов")
         return
-
-    # Show candidates list
-    lines = [f"{source} — {len(items)} кандидатов:"]
-    for i, item in enumerate(items[:8], 1):
-        lines.append(f"{i}. {item.get('shortcode', '?')} — ❤️{item.get('likes', 0)} 📹{item.get('views', 0)}")
-    await message.answer("\n".join(lines))
 
     bot = message.bot
     chat_ids = wf_settings.watch_feeder_chat_ids
@@ -226,7 +213,8 @@ async def cmd_wf_run(message: Message) -> None:
             errors += 1
 
     _record_cycle(sent, errors)
-    await message.answer(f"✅ Готово!\nОтправлено: {sent}\nОшибки: {errors}")
+    # Minimal confirmation — no verbose stats
+    await message.answer(f"✅ {sent} видео")
     logger.info("wf_run: sent=%d errors=%d", sent, errors)
 
 
@@ -375,7 +363,7 @@ async def cmd_wf_info(message: Message) -> None:
 
 @router.message(Command("wf_go"), F.chat.type == "private")
 async def cmd_wf_go(message: Message) -> None:
-    """Quick post: find best reel via DuckDuckGo and post immediately."""
+    """Quick post: find best reel and post immediately (silent)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
@@ -389,7 +377,7 @@ async def cmd_wf_go(message: Message) -> None:
         await message.answer("⚠️ Watch Feeder выключен")
         return
 
-    await message.answer("🔍 Ищу лучший reel…")
+    # Try DDG
     try:
         from watch_discovery import search_reels
         loop = asyncio.get_event_loop()
@@ -397,20 +385,15 @@ async def cmd_wf_go(message: Message) -> None:
             loop.run_in_executor(None, lambda: search_reels(max_queries=3, query_timeout=10)),
             timeout=45,
         )
-    except asyncio.TimeoutError:
-        results = []
-    except Exception as exc:
-        logger.warning("wf_go: DDG failed: %s", exc)
+    except Exception:
         results = []
 
     if not results:
-        # Fallback: use built-in seed
+        # Fallback: built-in seed
         from watch_feeder import _seed_cache_if_empty, _load_candidates
         _seed_cache_if_empty()
         results = _load_candidates()
-        if results:
-            await message.answer(f"📦 DDG недоступен, взял из built-in ({len(results)} шт)")
-        else:
+        if not results:
             await message.answer("❌ Ничего не нашёл")
             return
 
@@ -420,9 +403,7 @@ async def cmd_wf_go(message: Message) -> None:
         await message.answer(f"❌ Все {len(results)} уже постились")
         return
 
-    # Best one
     best = fresh[0]
-
     bot = message.bot
     chat_ids = wf_settings.watch_feeder_chat_ids
 
@@ -430,14 +411,7 @@ async def cmd_wf_go(message: Message) -> None:
     if ok:
         _mark_posted(posted, best["shortcode"])
         _record_cycle(1, 0)
-        sc = best["shortcode"]
-        await message.answer(
-            f"✅ Готово!\n"
-            f"🔗 instagram.com/reel/{sc}/\n"
-            f"📝 {best.get('title', '—')[:80]}\n"
-            f"📊 Найдено: {len(results)}, свежих: {len(fresh)}"
-        )
-        logger.info("wf_go: posted %s", sc)
+        # Silent — no verbose reply to admin
     else:
         _record_cycle(0, 1)
         await message.answer("❌ Не удалось отправить")

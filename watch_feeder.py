@@ -561,16 +561,60 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Send Instagram link — Svinolink bot auto-downloads and posts the video."""
+    """Download reel and send video to channel(s)."""
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
     sent = False
+
+    # Try downloading video
+    file_path = None
+    try:
+        from instagram_download import (
+            download_instagram_video, remove_file,
+            DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
+        )
+        from aiogram.types import FSInputFile
+
+        logger.info("watch_feed: downloading %s", link)
+        async with _download_semaphore:
+            file_path, caption = await asyncio.wait_for(
+                asyncio.to_thread(download_instagram_video, link),
+                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+            )
+
+        size = os.path.getsize(file_path)
+        if size > _MAX_BYTES:
+            logger.warning("watch_feed: %s too large (%d bytes), sending link", sc, size)
+            remove_file(file_path)
+            file_path = None
+    except asyncio.TimeoutError:
+        logger.warning("watch_feed: download timeout for %s, sending link", sc)
+        remove_file(file_path)
+        file_path = None
+    except Exception as exc:
+        logger.warning("watch_feed: download failed for %s: %s, sending link", sc, exc)
+        remove_file(file_path)
+        file_path = None
+
     for cid in chat_ids:
         try:
-            await bot.send_message(chat_id=cid, text=link)
+            if file_path:
+                await bot.send_video(
+                    chat_id=cid,
+                    video=FSInputFile(file_path),
+                    caption=link,
+                    supports_streaming=True,
+                )
+            else:
+                await bot.send_message(chat_id=cid, text=link)
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)
+
+    # Cleanup temp file
+    if file_path:
+        remove_file(file_path)
+
     return sent
 
 
