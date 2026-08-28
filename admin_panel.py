@@ -133,3 +133,99 @@ async def cmd_admin_reset(message: Message) -> None:
   uid = int(parts[1])
   reset_user(uid)
   await message.answer(f"Сброшен ИИ-лимит «свин» для user_id {uid}")
+
+
+# ── Watch Feeder admin commands ──────────────────────────────
+
+@router.message(Command("wf"), F.chat.type == "private")
+async def cmd_wf(message: Message) -> None:
+    """Watch Feeder status + help."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import get_stats_summary, settings as wf_settings
+    enabled = wf_settings.watch_feeder_enabled
+    chats = wf_settings.watch_feeder_chat_ids
+    interval = wf_settings.watch_feeder_interval_hours
+    status = "ON" if enabled else "OFF"
+    await message.answer(
+        f"{get_stats_summary()}\n"
+        f"Status: {status}\n"
+        f"Chat IDs: {chats}\n"
+        f"Interval: {interval}h\n\n"
+        "/wf_add URL — добавить ссылку в очередь\n"
+        "/wf_queue — показать очередь\n"
+        "/wf_stats — статистика\n"
+        "/wf_clear — очистить очередь"
+    )
+
+
+@router.message(Command("wf_add"), F.chat.type == "private")
+async def cmd_wf_add(message: Message) -> None:
+    """Add Instagram reel URL(s) to the watch feeder queue."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    import re as _re
+    from watch_feeder import add_to_queue
+    text = message.text or ""
+    urls = _re.findall(
+        r"https?://(?:www\.)?instagram\.com/reel/[A-Za-z0-9_-]+", text
+    )
+    if not urls:
+        await message.answer("Пришли ссылку на Instagram reel:\n/wf_add https://instagram.com/reel/XXXX/")
+        return
+    shortcodes = [
+        _re.search(r"/reel/([A-Za-z0-9_-]+)", u).group(1)
+        for u in urls
+        if _re.search(r"/reel/([A-Za-z0-9_-]+)", u)
+    ]
+    added = add_to_queue(shortcodes, source="admin")
+    await message.answer(f"Добавлено в очередь: {added} из {len(shortcodes)}")
+
+
+@router.message(Command("wf_queue"), F.chat.type == "private")
+async def cmd_wf_queue(message: Message) -> None:
+    """Show current watch feeder queue."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import load_queue
+    queue = load_queue()
+    if not queue:
+        await message.answer("Очередь пуста")
+        return
+    lines = []
+    for i, entry in enumerate(queue[:20], 1):
+        sc = entry.get("shortcode", "?")
+        src = entry.get("source", "?")
+        lines.append(f"{i}. {sc} ({src})")
+    if len(queue) > 20:
+        lines.append(f"... и ещё {len(queue) - 20}")
+    await message.answer(f"Очередь ({len(queue)}):\n" + "\n".join(lines))
+
+
+@router.message(Command("wf_stats"), F.chat.type == "private")
+async def cmd_wf_stats(message: Message) -> None:
+    """Show watch feeder statistics."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import get_stats_summary
+    await message.answer(get_stats_summary())
+
+
+@router.message(Command("wf_clear"), F.chat.type == "private")
+async def cmd_wf_clear(message: Message) -> None:
+    """Clear the watch feeder queue."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import save_queue
+    save_queue([])
+    await message.answer("Очередь очищена")
