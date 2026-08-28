@@ -248,10 +248,10 @@ async def cmd_wf(message: Message) -> None:
             f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
             f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
             "Команды:\n"
-            "/wf_run — постить сейчас (из кэша)\n"
-            "/wf seiko — лучший reel Seiko\n"
-            "/wf rolex — лучший reel Rolex\n"
-            "/wf omega — лучший reel Omega\n"
+            "/wf_go — 🚀 быстрый пост (1 лучший reel)\n"
+            "/wf_run — постить из кэша\n"
+            "/wf rolex — лучший reel по бренду\n"
+            "/wf_info — полная информация\n"
             "/wf_stats — статистика"
         )
         return
@@ -300,3 +300,124 @@ async def cmd_wf(message: Message) -> None:
     else:
         _record_cycle(0, 1)
         await message.answer("❌ Не удалось постить")
+
+@router.message(Command("wf_info"), F.chat.type == "private")
+async def cmd_wf_info(message: Message) -> None:
+    """Full watch feeder info: settings, stats, cache, discovery status."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import (
+        get_stats_summary, _load_candidates, _load_posted,
+        _load_accounts, settings as wf_settings,
+    )
+
+    posted = _load_posted()
+    cache = _load_candidates()
+    accounts = _load_accounts()
+    stats_text = get_stats_summary()
+
+    # Top 5 from cache
+    top5 = sorted(cache, key=lambda x: x.get("score", 0), reverse=True)[:5]
+    top5_lines = []
+    for i, c in enumerate(top5, 1):
+        sc = c.get("shortcode", "?")
+        title = c.get("title", "")[:40]
+        src = c.get("source", "?")
+        top5_lines.append(f"  {i}. [{src}] {sc} — {title}")
+
+    # Discovery source
+    try:
+        from watch_discovery import search_reels
+        ddg_status = "✅ duckduckgo_search installed"
+    except ImportError:
+        try:
+            from ddgs import DDGS
+            ddg_status = "✅ ddgs installed"
+        except ImportError:
+            ddg_status = "❌ not installed"
+
+    chat_ids = wf_settings.watch_feeder_chat_ids
+    text = (
+        f"📊 Watch Feeder — полная информация\n"
+        f"{'═' * 35}\n\n"
+        f"{stats_text}\n\n"
+        f"⚙️ Settings:\n"
+        f"  Enabled: {wf_settings.watch_feeder_enabled}\n"
+        f"  Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
+        f"  Posts/hour: {wf_settings.wf_posts_per_hour}\n"
+        f"  Interval: {wf_settings.watch_feeder_interval_hours}h\n"
+        f"  Chats: {chat_ids}\n"
+        f"  Accounts loaded: {len(accounts)}\n\n"
+        f"🔍 Discovery:\n"
+        f"  {ddg_status}\n\n"
+        f"📦 Cache ({len(cache)} candidates, {len(posted)} posted):\n"
+    )
+    if top5_lines:
+        text += "\n".join(top5_lines)
+    else:
+        text += "  (пусто)"
+
+    await message.answer(text)
+
+
+@router.message(Command("wf_go"), F.chat.type == "private")
+async def cmd_wf_go(message: Message) -> None:
+    """Quick post: find best reel via DuckDuckGo and post immediately."""
+    if not message.from_user or not is_admin_user(
+        message.from_user.id, message.from_user.username
+    ):
+        return
+    from watch_feeder import (
+        _post_single, _load_posted, _mark_posted,
+        _record_cycle, settings as wf_settings,
+    )
+
+    if not wf_settings.watch_feeder_enabled:
+        await message.answer("⚠️ Watch Feeder выключен")
+        return
+
+    await message.answer("🔍 Ищу лучший reel…")
+    try:
+        from watch_discovery import search_reels
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None, lambda: search_reels(max_results_per_query=5)
+        )
+    except Exception as exc:
+        await message.answer(f"❌ DuckDuckGo: {exc}")
+        return
+
+    if not results:
+        await message.answer("❌ Ничего не нашёл")
+        return
+
+    posted = _load_posted()
+    fresh = [r for r in results if r["shortcode"] not in posted]
+    if not fresh:
+        await message.answer(f"❌ Все {len(results)} уже постились")
+        return
+
+    # Best one
+    best = fresh[0]
+
+    bot = message.bot
+    chat_ids = wf_settings.watch_feeder_chat_ids
+
+    ok = await _post_single(bot, chat_ids, best)
+    if ok:
+        _mark_posted(posted, best["shortcode"])
+        _record_cycle(1, 0)
+        sc = best["shortcode"]
+        await message.answer(
+            f"✅ Готово!\n"
+            f"🔗 instagram.com/reel/{sc}/\n"
+            f"📝 {best.get('title', '—')[:80]}\n"
+            f"📊 Найдено: {len(results)}, свежих: {len(fresh)}"
+        )
+        logger.info("wf_go: posted %s", sc)
+    else:
+        _record_cycle(0, 1)
+        await message.answer("❌ Не удалось отправить")
+
