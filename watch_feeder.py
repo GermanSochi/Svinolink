@@ -413,6 +413,61 @@ async def _fetch_from_accounts(top_n: int = 5) -> list[dict]:
     return candidates[:top_n]
 
 
+async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
+    """Fetch reels from accounts matching keyword, sorted by likes descending."""
+    from instagram_download import _get_client
+
+    posted = _load_posted()
+    accounts = _load_accounts()
+    # Filter accounts whose username contains the keyword
+    matched = [a for a in accounts if keyword in a.lower()]
+    if not matched:
+        # Try partial match: "seiko" matches "seikowatches"
+        matched = [a for a in accounts if any(w in a.lower() for w in keyword.split())]
+    if not matched:
+        logger.info("watch_feed: keyword '%s' matched 0 accounts", keyword)
+        return []
+
+    logger.info("watch_feed: keyword '%s' matched %d accounts: %s", keyword, len(matched), matched)
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    cl = _get_client()
+
+    for username in matched:
+        try:
+            uid = await asyncio.to_thread(cl.user_id_from_username, username)
+            medias = await asyncio.to_thread(cl.user_medias, uid, 12)
+        except Exception as exc:
+            logger.debug("watch_feed: fetch @%s failed: %s", username, exc)
+            continue
+
+        for m in medias:
+            sc = getattr(m, "code", "") or ""
+            if not sc or sc in posted or sc in seen:
+                continue
+            if getattr(m, "media_type", 0) not in (2, 8):
+                continue
+            likes = getattr(m, "like_count", 0) or 0
+            comments = getattr(m, "comment_count", 0) or 0
+            views = getattr(m, "view_count", 0) or 0
+            score = likes + comments * 3 + views * 0.1
+            candidates.append({
+                "shortcode": sc,
+                "username": username,
+                "media_id": m.id,
+                "likes": likes,
+                "comments": comments,
+                "views": int(views),
+                "score": score,
+            })
+            seen.add(sc)
+
+    # Sort by likes (most liked first)
+    candidates.sort(key=lambda x: x["likes"], reverse=True)
+    logger.info("watch_feed: keyword '%s' found %d candidates from %d accounts", keyword, len(candidates), len(matched))
+    return candidates[:top_n]
+
+
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:

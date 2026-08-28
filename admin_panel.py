@@ -156,38 +156,13 @@ async def cmd_wf(message: Message) -> None:
         f"Interval: {interval}h\n"
         f"Window: {wf_settings.wf_post_start_hour:02d}:00–{wf_settings.wf_post_end_hour:02d}:00 MSK\n"
         f"Posts/hour: {wf_settings.wf_posts_per_hour}\n\n"
-        "/wf_run — запустить цикл сейчас\n"
-        "/wf — постить 1 случайный reel\n"
-        "/wf_add URL — добавить ссылку в очередь\n"
+        "/wf — постить случайный reel\n"
+        "/wf seiko — лучший reel по бренду\n"
+        "/wf_run — запустить полный цикл\n"
         "/wf_queue — показать очередь\n"
         "/wf_stats — статистика\n"
         "/wf_clear — очистить очередь"
     )
-
-
-@router.message(Command("wf_add"), F.chat.type == "private")
-async def cmd_wf_add(message: Message) -> None:
-    """Add Instagram reel URL(s) to the watch feeder queue."""
-    if not message.from_user or not is_admin_user(
-        message.from_user.id, message.from_user.username
-    ):
-        return
-    import re as _re
-    from watch_feeder import add_to_queue
-    text = message.text or ""
-    urls = _re.findall(
-        r"https?://(?:www\.)?instagram\.com/reel/[A-Za-z0-9_-]+", text
-    )
-    if not urls:
-        await message.answer("Пришли ссылку на Instagram reel:\n/wf_add https://instagram.com/reel/XXXX/")
-        return
-    shortcodes = [
-        _re.search(r"/reel/([A-Za-z0-9_-]+)", u).group(1)
-        for u in urls
-        if _re.search(r"/reel/([A-Za-z0-9_-]+)", u)
-    ]
-    added = add_to_queue(shortcodes, source="admin")
-    await message.answer(f"Добавлено в очередь: {added} из {len(shortcodes)}")
 
 
 @router.message(Command("wf_queue"), F.chat.type == "private")
@@ -303,14 +278,14 @@ async def cmd_wf_run(message: Message) -> None:
 
 @router.message(Command("wf"), F.chat.type == "private")
 async def cmd_wf(message: Message) -> None:
-    """Post one random reel from accounts (quick one-shot)."""
+    """Post a reel: /wf (random) or /wf keyword (best by likes from matching accounts)."""
     if not message.from_user or not is_admin_user(
         message.from_user.id, message.from_user.username
     ):
         return
     from instagram_download import instagram_is_active_check
     from watch_feeder import (
-        _fetch_from_accounts, _post_single, _load_posted, _mark_posted,
+        _fetch_from_accounts, _fetch_keyword, _post_single, _load_posted, _mark_posted,
         _record_cycle,
     )
 
@@ -321,27 +296,48 @@ async def cmd_wf(message: Message) -> None:
         await message.answer("⚠️ Instagram неактивен")
         return
 
-    await message.answer("🔍 Сканирую аккаунты...")
+    # Parse: /wf or /wf seiko
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    keyword = parts[1].strip().lower() if len(parts) > 1 else ""
 
-    try:
-        candidates = await _fetch_from_accounts(top_n=15)
-    except Exception as exc:
-        await message.answer(f"❌ Ошибка скана: {exc}")
-        return
+    if keyword:
+        await message.answer(f"🔍 Ищу лучший reel по «{keyword}»...")
+        try:
+            candidates = await _fetch_keyword(keyword, top_n=10)
+        except Exception as exc:
+            await message.answer(f"❌ Ошибка: {exc}")
+            return
+        if not candidates:
+            await message.answer(f"❌ Ничего не нашёл по «{keyword}»")
+            return
+        # Pick best by likes (engagement)
+        posted = _load_posted()
+        fresh = [c for c in candidates if c["shortcode"] not in posted]
+        if not fresh:
+            await message.answer(f"❌ Все {len(candidates)} по «{keyword}» уже постились")
+            return
+        chosen = max(fresh, key=lambda x: x.get("likes", 0))
+        label = f"«{keyword}» (лучший из {len(fresh)})"
+    else:
+        await message.answer("🔍 Сканирую аккаунты...")
+        try:
+            candidates = await _fetch_from_accounts(top_n=15)
+        except Exception as exc:
+            await message.answer(f"❌ Ошибка скана: {exc}")
+            return
+        if not candidates:
+            await message.answer("❌ Не нашёл ни одного нового reel")
+            return
+        posted = _load_posted()
+        fresh = [c for c in candidates if c["shortcode"] not in posted]
+        if not fresh:
+            await message.answer(f"❌ Все {len(candidates)} кандидатов уже постились")
+            return
+        import random
+        chosen = random.choice(fresh)
+        label = f"случайный из {len(fresh)}"
 
-    if not candidates:
-        await message.answer("❌ Не нашёл ни одного нового reel")
-        return
-
-    posted = _load_posted()
-    # Filter out already posted
-    fresh = [c for c in candidates if c["shortcode"] not in posted]
-    if not fresh:
-        await message.answer(f"❌ Все {len(candidates)} кандидатов уже постились")
-        return
-
-    import random
-    chosen = random.choice(fresh)
     bot = message.bot
     chat_ids = settings.watch_feeder_chat_ids
 
@@ -350,10 +346,11 @@ async def cmd_wf(message: Message) -> None:
         _mark_posted(posted, chosen["shortcode"])
         _record_cycle(1, 0)
         sc = chosen["shortcode"]
-        score = chosen.get("score", 0)
+        likes = chosen.get("likes", 0)
         await message.answer(
             f"✅ Постнуто! @{chosen.get('username', '?')}\n"
-            f"score={score:.0f} | /{sc}"
+            f"❤️ {likes} likes | {label}\n"
+            f"instagram.com/reel/{sc}"
         )
     else:
         _record_cycle(0, 1)
