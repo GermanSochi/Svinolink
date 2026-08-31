@@ -15,3 +15,12 @@ graphify-out/
 CLAUDE.md
 .cursor/
 .vscode/
+scripts/
+test_*.py
+_*.py
+*.md
+render.yaml
+assets/
+sql/
+triggers.json
+watch_feeder_links.txt
