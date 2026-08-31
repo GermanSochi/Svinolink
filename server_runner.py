@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
-from functools import partial
 
 import aiohttp
 from aiohttp import web
@@ -12,26 +11,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from bot_startup import configure_bot
-from ai_quota import HOURLY_LIMIT
-from chat_memory import check_connection, fetch_audit_rows, init_chat_memory, is_pool_ready, url_hint
-from chat_style import daily_style_loop
-from watch_feeder import watch_feed_loop, candidate_scan_loop
 from config import settings
 from instagram_download import init_instagram_downloader
-from game_init import init_game_db
-from webapp_server import STATIC, register_miniapp_routes
 
 logger = logging.getLogger(__name__)
 
-SELF_PING_INTERVAL = 480  # 8 минут — безопаснее 15 мин таймаута Render
-
-
-def _task_error_logger(name: str, task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.error("Background task %s crashed: %s", name, exc, exc_info=exc)
+SELF_PING_INTERVAL = 480  # 8 минут — Render таймаут 15 мин
 
 
 async def apply_webhook(bot: Bot) -> str:
@@ -59,142 +44,39 @@ def build_app(bot: Bot, dp: Dispatcher, *, webhook: bool) -> web.Application:
     app = web.Application()
 
     async def health(_: web.Request) -> web.Response:
-        miniapp_html = ""
-        try:
-            miniapp_html = (STATIC / "index.html").read_text(encoding="utf-8")
-        except OSError:
-            pass
         payload = {
             "status": "ok",
             "bot": "svinolink",
             "version": settings.app_version,
-            "svin_hourly_limit": HOURLY_LIMIT,
-            "miniapp_manual_input": "manualChatId" in miniapp_html,
-            "miniapp": "on" if settings.miniapp_url else "off",
             "mode": "webhook" if webhook else "polling",
-            "chat_memory": (
-                "connected"
-                if is_pool_ready()
-                else ("configured" if settings.supabase_database_url.strip() else "off")
-            ),
-            "watch_feeder": "on" if settings.watch_feeder_enabled else "off",
+            "instagram": "active" if settings.instagram_is_active() else "off",
         }
         return web.Response(
             text=json.dumps(payload, ensure_ascii=False),
             content_type="application/json",
         )
 
-    async def health_db(_: web.Request) -> web.Response:
-        if not settings.supabase_database_url.strip():
-            payload = {"ok": False, "detail": "SUPABASE_DATABASE_URL not set"}
-        else:
-            try:
-                ok, detail = await check_connection()
-                payload = {
-                    "ok": ok,
-                    "detail": detail,
-                    "pool_ready": is_pool_ready(),
-                    "url_hint": url_hint(settings.supabase_database_url),
-                }
-            except Exception as exc:
-                payload = {"ok": False, "detail": str(exc)}
-        return web.Response(
-            text=json.dumps(payload, ensure_ascii=False),
-            content_type="application/json",
-        )
-
-    async def health_db_audit(_: web.Request) -> web.Response:
-        if not settings.supabase_database_url.strip():
-            payload = {"ok": False, "detail": "SUPABASE_DATABASE_URL not set", "rows": []}
-        else:
-            ok, detail = await check_connection()
-            if not ok:
-                payload = {"ok": False, "detail": detail, "rows": []}
-            else:
-                rows = await fetch_audit_rows(10)
-                payload = {
-                    "ok": True,
-                    "detail": detail,
-                    "count": len(rows),
-                    "rows": rows,
-                }
-        return web.Response(
-            text=json.dumps(payload, ensure_ascii=False, default=str),
-            content_type="application/json",
-        )
-
-    app.router.add_get("/", health)
     app.router.add_get("/health", health)
-    app.router.add_get("/health/db", health_db)
-    app.router.add_get("/health/db/audit", health_db_audit)
-    register_miniapp_routes(app)
+    app.router.add_head("/health", health)
+
+    async def on_startup(app_: web.Application) -> None:
+        logger.info("on_startup: begin")
+        await configure_bot(bot)
+        init_instagram_downloader()
+        logger.info("on_startup: done — bot ready")
+
+    app.on_startup.append(on_startup)
 
     if webhook:
         route = settings.webhook_route
         SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=route)
         setup_application(app, dp, bot=bot)
 
-        async def on_startup(app: web.Application) -> None:
-            await init_chat_memory()
-            init_instagram_downloader()
-            with suppress(Exception):
-                await init_game_db()
+        async def on_startup_hook(app_: web.Application) -> None:
             hooked = await apply_webhook(bot)
-            await configure_bot(bot)
-            app["style_task"] = asyncio.create_task(daily_style_loop())
-            app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
-            app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
-            app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
-            app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
-            app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
-            app["wf_scan_task"] = asyncio.create_task(candidate_scan_loop(bot))
-            app["wf_scan_task"].add_done_callback(partial(_task_error_logger, "wf_scan_loop"))
-            logger.info("Listening POST %s | Mini App %s | self-ping every %ss",
-                        route, settings.miniapp_url or "off", SELF_PING_INTERVAL)
+            logger.info("Webhook set: %s", hooked)
 
-        async def on_shutdown(app: web.Application) -> None:
-            for key in ("style_task", "keepalive_task", "watch_feed_task", "wf_scan_task"):
-                task = app.get(key)
-                if task:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
-            with suppress(Exception):
-                await bot.delete_webhook(drop_pending_updates=False)
-
-        app.on_startup.append(on_startup)
-        app.on_shutdown.append(on_shutdown)
-    else:
-
-        async def on_startup(app: web.Application) -> None:
-            await init_chat_memory()
-            init_instagram_downloader()
-            with suppress(Exception):
-                await init_game_db()
-            # Агрессивная очистка webhook — если он остался от Render/другого инстанса
-            for attempt in range(3):
-                try:
-                    info = await bot.get_webhook_info()
-                    if info.url:
-                        logger.warning("Webhook active (%s), deleting (attempt %d)", info.url, attempt + 1)
-                        await bot.delete_webhook(drop_pending_updates=True)
-                    break
-                except Exception as exc:
-                    logger.warning("delete_webhook attempt %d failed: %s", attempt + 1, exc)
-                    await asyncio.sleep(1)
-            await configure_bot(bot)
-            app["style_task"] = asyncio.create_task(daily_style_loop())
-            app["keepalive_task"] = asyncio.create_task(_self_ping_loop(settings.port))
-            app["style_task"].add_done_callback(partial(_task_error_logger, "style_loop"))
-            app["keepalive_task"].add_done_callback(partial(_task_error_logger, "self_ping"))
-            app["watch_feed_task"] = asyncio.create_task(watch_feed_loop(bot))
-            app["watch_feed_task"].add_done_callback(partial(_task_error_logger, "watch_feed_loop"))
-            app["wf_scan_task"] = asyncio.create_task(candidate_scan_loop(bot))
-            app["wf_scan_task"].add_done_callback(partial(_task_error_logger, "wf_scan_loop"))
-            logger.info("Polling mode | Mini App %s | self-ping every %ss",
-                        settings.miniapp_url or "off", SELF_PING_INTERVAL)
-
-        app.on_startup.append(on_startup)
+        app.on_startup.append(on_startup_hook)
 
     return app
 
@@ -205,6 +87,8 @@ async def run_http_forever(app: web.Application) -> None:
     site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
     await site.start()
     logger.info("HTTP server on 0.0.0.0:%s", settings.port)
+    # Self-ping to keep Render alive
+    asyncio.create_task(_self_ping_loop(settings.port))
     try:
         while True:
             await asyncio.sleep(3600)

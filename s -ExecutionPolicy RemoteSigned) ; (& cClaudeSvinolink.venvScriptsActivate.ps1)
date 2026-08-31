@@ -1,0 +1,105 @@
+[1mdiff --git a/watch_feeder.py b/watch_feeder.py[m
+[1mindex 5137aaf..6b739dd 100644[m
+[1m--- a/watch_feeder.py[m
+[1m+++ b/watch_feeder.py[m
+[36m@@ -14,7 +14,6 @@[m [mfrom __future__ import annotations[m
+ import asyncio[m
+ import json[m
+ import logging[m
+[31m-import os[m
+ import random[m
+ import re[m
+ import time[m
+[36m@@ -25,6 +24,11 @@[m [mfrom config import settings[m
+ [m
+ logger = logging.getLogger(__name__)[m
+ [m
+[32m+[m[32m# ── Auto-posting pause flag (toggle via /wf_stop /wf_start) ──[m
+[32m+[m
+[32m+[m[32m_auto_posting_paused: bool = False[m
+[32m+[m
+[32m+[m
+ # ── Curated account list (editable at runtime via data/watch_accounts.json) ──[m
+ [m
+ _WATCH_ACCOUNTS_DEFAULT = [[m
+[36m@@ -561,19 +565,65 @@[m [masync def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:[m
+ # ── Post videos ──[m
+ [m
+ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:[m
+[31m-    """Send Instagram link — Svinolink bot auto-downloads and posts the video."""[m
+[32m+[m[32m    """Download reel and send as video. Skip silently if download fails."""[m
+[32m+[m[32m    from instagram_download import ([m
+[32m+[m[32m        download_instagram_video, remove_file,[m
+[32m+[m[32m        DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,[m
+[32m+[m[32m        TELEGRAM_MAX_BYTES,[m
+[32m+[m[32m    )[m
+[32m+[m[32m    from aiogram.types import FSInputFile[m
+[32m+[m
+     sc = item["shortcode"][m
+     link = f"https://www.instagram.com/reel/{sc}/"[m
+[32m+[m[32m    file_path = None[m
+[32m+[m
+[32m+[m[32m    try:[m
+[32m+[m[32m        logger.info("watch_feed: downloading %s", sc)[m
+[32m+[m[32m        async with _download_semaphore:[m
+[32m+[m[32m            file_path, _ = await asyncio.wait_for([m
+[32m+[m[32m                asyncio.to_thread(download_instagram_video, link),[m
+[32m+[m[32m                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,[m
+[32m+[m[32m            )[m
+[32m+[m
+[32m+[m[32m        if file_path.stat().st_size > TELEGRAM_MAX_BYTES:[m
+[32m+[m[32m            logger.warning("watch_feed: %s too large", sc)[m
+[32m+[m[32m            remove_file(file_path)[m
+[32m+[m[32m            return False[m
+[32m+[m[32m    except Exception as exc:[m
+[32m+[m[32m        logger.warning("watch_feed: download failed %s: %s", sc, exc)[m
+[32m+[m[32m        remove_file(file_path)[m
+[32m+[m[32m        return False[m
+[32m+[m
+     sent = False[m
+     for cid in chat_ids:[m
+         try:[m
+[31m-            await bot.send_message(chat_id=cid, text=link)[m
+[32m+[m[32m            await bot.send_video([m
+[32m+[m[32m                chat_id=cid,[m
+[32m+[m[32m                video=FSInputFile(file_path),[m
+[32m+[m[32m                supports_streaming=True,[m
+[32m+[m[32m            )[m
+             sent = True[m
+         except Exception as exc:[m
+             logger.warning("watch_feed: send to %s failed: %s", cid, exc)[m
+[32m+[m
+[32m+[m[32m    remove_file(file_path)[m
+     return sent[m
+ [m
+ [m
+[32m+[m[32mdef pause_auto_posting() -> None:[m
+[32m+[m[32m    global _auto_posting_paused[m
+[32m+[m[32m    _auto_posting_paused = True[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef resume_auto_posting() -> None:[m
+[32m+[m[32m    global _auto_posting_paused[m
+[32m+[m[32m    _auto_posting_paused = False[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef is_auto_posting_paused() -> bool:[m
+[32m+[m[32m    return _auto_posting_paused[m
+[32m+[m
+[32m+[m
+ async def _process_items([m
+     bot, chat_ids: list[int], items: list[dict],[m
+ ) -> tuple[int, int]:[m
+[36m@@ -804,6 +854,12 @@[m [masync def watch_feed_loop(bot) -> None:[m
+ [m
+     while True:[m
+         try:[m
+[32m+[m[32m            # ── Check pause flag ──[m
+[32m+[m[32m            if _auto_posting_paused:[m
+[32m+[m[32m                logger.info("watch_feed: paused by /wf_stop, sleeping 30s")[m
+[32m+[m[32m                await asyncio.sleep(30)[m
+[32m+[m[32m                continue[m
+[32m+[m
+             # ── Check posting window ──[m
+             # TODO: Remove this comment and restore window check after testing[m
+             # if not _in_posting_window():[m

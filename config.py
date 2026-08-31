@@ -46,33 +46,6 @@ class Settings(BaseSettings):
     # true / 1 / yes — бот не трогает Instagram (ни cookies, ни логин)
     instagram_paused: bool = Field(default=False, alias="INSTAGRAM_PAUSED")
 
-    # --- Feature flags (все по умолчанию выключены) ---
-    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
-    web_search_enabled: bool = Field(default=False, alias="WEB_SEARCH_ENABLED")
-    games_enabled: bool = Field(default=False, alias="GAMES_ENABLED")
-    memory_enabled: bool = Field(default=False, alias="MEMORY_ENABLED")
-    skills_tools_enabled: bool = Field(default=False, alias="SKILLS_TOOLS_ENABLED")
-
-    # --- Watch Feeder: автопостинг часов из Instagram ---
-    watch_feeder_enabled: bool = Field(default=False, alias="WATCH_FEEDER_ENABLED")
-    watch_feeder_chat_ids_raw: str = Field(default="", alias="WATCH_FEEDER_CHAT_IDS")
-    watch_feeder_interval_hours: int = Field(default=1, alias="WATCH_FEEDER_INTERVAL_HOURS")
-    wf_post_start_hour: int = Field(default=7, alias="WF_POST_START_HOUR")
-    wf_post_end_hour: int = Field(default=1, alias="WF_POST_END_HOUR")
-    wf_posts_per_hour: int = Field(default=8, alias="WF_POSTS_PER_HOUR")
-
-    @field_validator("watch_feeder_enabled", mode="before")
-    @classmethod
-    def parse_watch_feeder_enabled(cls, v: object) -> bool:
-        if isinstance(v, bool):
-            return v
-        if v is None:
-            return False
-        s = str(v).strip().lower()
-        if s in {"", "0", "false", "no", "off"}:
-            return False
-        return s in {"1", "true", "yes", "on"}
-
     @field_validator("instagram_paused", mode="before")
     @classmethod
     def parse_instagram_paused(cls, v: object) -> bool:
@@ -120,15 +93,6 @@ class Settings(BaseSettings):
         return out
 
     @property
-    def watch_feeder_chat_ids(self) -> list[int]:
-        out: list[int] = []
-        for part in self.watch_feeder_chat_ids_raw.split(","):
-            part = part.strip()
-            if part.lstrip("-").isdigit():
-                out.append(int(part))
-        return out
-
-    @property
     def app_base_url(self) -> str:
         return (self.public_base_url or self.webhook_base_url).rstrip("/")
 
@@ -148,13 +112,6 @@ class Settings(BaseSettings):
             else:
                 self._app_version_cache = "dev"
         return self._app_version_cache
-
-    @property
-    def miniapp_url(self) -> str:
-        base = self.app_base_url
-        if not base:
-            return ""
-        return f"{base}/miniapp?v={self.app_version}"
 
     @property
     def webhook_route(self) -> str:
