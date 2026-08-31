@@ -728,6 +728,10 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         raise RuntimeError(INSTAGRAM_NO_CREDS_MSG)
 
     clean = clean_instagram_url(url)
+    logger.info(
+        "IG download: url=%s clean=%s paused=%s active=%s",
+        url, clean, settings.instagram_paused, settings.instagram_is_active(),
+    )
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/, /p/, /stories/ или /s/")
 
@@ -740,7 +744,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path, caption
     except Exception as exc:
-        logger.warning("private-api failed: %s", exc)
+        logger.warning("private-api failed (url=%s): %s", clean, exc, exc_info=True)
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
@@ -750,7 +754,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path, ""
     except Exception as exc:
-        logger.warning("ytdlp-fast failed: %s", exc)
+        logger.warning("ytdlp-fast failed (url=%s): %s", clean, exc, exc_info=True)
 
     # Путь 3: yt-dlp полный fallback (~3-8с)
     try:
@@ -759,7 +763,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
         return path, ""
     except Exception as exc:
-        logger.warning("ytdlp-fallback failed: %s", exc)
+        logger.warning("ytdlp-fallback failed (url=%s): %s", clean, exc, exc_info=True)
 
     # Путь 4: instagrapi — последний fallback
     from instagrapi.exceptions import ClientError

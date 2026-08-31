@@ -160,7 +160,11 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         if "cookie" in error_text or "СЃРµСЃСЃРёСЏ" in error_text or "login" in error_text:
             from instagram_download import _notify_admin_cookies_expired
             await _notify_admin_cookies_expired(bot)
-            # РњРѕР»С‡Р° РІС‹С…РѕРґРёРј вЂ” РЅРµ СЃРїР°РјРёРј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
+            await message.answer(
+                "🐷 Instagram протухла сессия на сервере. "
+                "Админу уже написал. "
+                "Попробуй позже или открой по ссылке."
+            )
             return
         if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
             bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")
