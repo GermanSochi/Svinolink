@@ -1,0 +1,17 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+data/cookies.txt
+data/instagram_session.json
+downloads/
+*.mp4
+bot.log
+bot.err.log
+graphify-out/
+CLAUDE.md
+.cursor/
+.vscode/
