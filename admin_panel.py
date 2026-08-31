@@ -97,11 +97,13 @@ async def cmd_admin_stats(message: Message) -> None:
         message.from_user.id, message.from_user.username
     ):
         return
+    ig_status = "активен" if settings.instagram_is_active() else "выключен"
+    ig_paused = "да" if settings.instagram_paused else "нет"
     await message.answer(
-        "\u0421\u0442\u0430\u0442\u0443\u0441:\n"
-        f"\u0412\u0435\u0440\u0441\u0438\u044f: {settings.app_version}\n"
-        f"\u0418\u043d\u0441\u0442\u0430\u0433\u0440\u0430\u043c: {'\u0430\u043a\u0442\u0438\u0432\u0435\u043d' if settings.instagram_is_active() else '\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d'}\n"
-        f"\u041f\u0430\u0443\u0437\u0430 IG: {'\u0434\u0430' if settings.instagram_paused else '\u043d\u0435\u0442'}"
+        "Статус:\n"
+        f"Версия: {settings.app_version}\n"
+        f"Инстаграм: {ig_status}\n"
+        f"Пауза IG: {ig_paused}"
     )
 
 
