@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -36,10 +35,6 @@ def _build_dispatcher() -> Dispatcher:
 async def main() -> None:
     if not settings.bot_token:
         raise RuntimeError("Задай BOT_TOKEN в .env")
-
-    if settings.is_render and not settings.webhook_base_url.strip():
-        logger.error("На Render нужен WEBHOOK_BASE_URL=https://<service>.onrender.com (без /)")
-        sys.exit(1)
 
     bot = Bot(token=settings.bot_token)
     dp = _build_dispatcher()
