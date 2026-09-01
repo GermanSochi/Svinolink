@@ -26,25 +26,8 @@ DOWNLOAD_TOTAL_TIMEOUT_SEC = 90  # Render free tier — медленная се�
 DOWNLOAD_CHUNK_SIZE = 262144  # 256KB — mejor throughput чем 64KB
 
 # --- SOCKS5 proxy (xray local) ---
-# Legacy single-proxy support — new code should use proxy_pool from anti_detection
 PROXY_URL = os.environ.get("PROXY_URL", "socks5h://127.0.0.1:10808")
 PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if os.environ.get("PROXY_ENABLED") == "1" else None
-
-
-def _get_ytdlp_proxy() -> str | None:
-    """Get proxy URL for yt-dlp — tries pool first, falls back to legacy PROXY_URL."""
-    try:
-        from instagram_anti_detection import proxy_pool
-        if proxy_pool.active:
-            proxy = proxy_pool.get()
-            if proxy:
-                return proxy["https"]
-    except ImportError:
-        pass
-    if PROXIES:
-        return PROXY_URL
-    return None
-
 
 RENDER_IP_BLOCK_MSG = (
     "❌ Ошибка: Сервера Instagram заблокировали IP-адрес хостинга Render. "
@@ -219,12 +202,8 @@ def _apply_env_cookies(cl) -> None:
 
 def _new_instagram_client():
     from instagrapi import Client
-    from instagram_anti_detection import configure_impersonation, apply_device_rotation
 
-    cl = Client(request_timeout=INSTAGRAM_REQUEST_TIMEOUT)
-    configure_impersonation(cl)
-    apply_device_rotation(cl)
-    return cl
+    return Client(request_timeout=INSTAGRAM_REQUEST_TIMEOUT)
 
 
 def _build_client():
@@ -237,14 +216,6 @@ def _build_client():
             return _client
 
         cl = _new_instagram_client()
-
-        # Apply proxy from pool if available
-        from instagram_anti_detection import proxy_pool
-        proxy = proxy_pool.get()
-        if proxy:
-            cl.set_proxy(proxy["https"])
-            logger.info("instagrapi: proxy applied from pool")
-
         cookies_path = _cookies_file()
         session_file = settings.instagram_session_file
         user = settings.instagram_username.strip()
@@ -318,15 +289,6 @@ def instagram_user_message() -> str:
     if settings.instagram_is_active():
         return ""
     return INSTAGRAM_NO_CREDS_MSG
-
-
-def instagram_is_active_check() -> bool:
-    """Проверка: Instagram доступен для запросов (не на паузе, есть cookies)."""
-    if settings.instagram_paused:
-        return False
-    if _cookies_loaded or (_client is not None and _client.user_id is not None):
-        return True
-    return settings.instagram_is_active()
 
 
 def init_instagram_downloader() -> None:
@@ -519,9 +481,8 @@ def _ytdlp_extract_url(url: str) -> str | None:
             "-j",
             url,
         ]
-        _ytdlp_proxy = _get_ytdlp_proxy()
-        if _ytdlp_proxy:
-            cmd.extend(["--proxy", _ytdlp_proxy])
+        if PROXIES:
+            cmd.extend(["--proxy", PROXY_URL])
         cookies_path = _cookies_file()
         if cookies_path.is_file():
             cmd.insert(1, "--cookies")
@@ -588,9 +549,8 @@ def _download_ytdlp_fallback(url: str) -> Path:
         "-o", str(dest),
         url,
     ]
-    _ytdlp_proxy = _get_ytdlp_proxy()
-    if _ytdlp_proxy:
-        cmd.extend(["--proxy", _ytdlp_proxy])
+    if PROXIES:
+        cmd.extend(["--proxy", PROXY_URL])
     cookies_path = _cookies_file()
     if cookies_path.is_file():
         cmd.insert(1, "--cookies")
@@ -728,10 +688,6 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         raise RuntimeError(INSTAGRAM_NO_CREDS_MSG)
 
     clean = clean_instagram_url(url)
-    logger.info(
-        "IG download: url=%s clean=%s paused=%s active=%s",
-        url, clean, settings.instagram_paused, settings.instagram_is_active(),
-    )
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/, /p/, /stories/ или /s/")
 
@@ -744,7 +700,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path, caption
     except Exception as exc:
-        logger.warning("private-api failed (url=%s): %s", clean, exc, exc_info=True)
+        logger.warning("private-api failed: %s", exc)
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
@@ -754,7 +710,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return path, ""
     except Exception as exc:
-        logger.warning("ytdlp-fast failed (url=%s): %s", clean, exc, exc_info=True)
+        logger.warning("ytdlp-fast failed: %s", exc)
 
     # Путь 3: yt-dlp полный fallback (~3-8с)
     try:
@@ -763,7 +719,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
         return path, ""
     except Exception as exc:
-        logger.warning("ytdlp-fallback failed (url=%s): %s", clean, exc, exc_info=True)
+        logger.warning("ytdlp-fallback failed: %s", exc)
 
     # Путь 4: instagrapi — последний fallback
     from instagrapi.exceptions import ClientError

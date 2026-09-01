@@ -7,17 +7,20 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeDefault,
+    MenuButtonWebApp,
+    WebAppInfo,
 )
 
 from config import settings
+from svin_system_prompt import BOT_RULES_SHORT
 
 logger = logging.getLogger(__name__)
 
 
 async def configure_bot(bot: Bot) -> None:
     try:
-        await bot.set_my_description("\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 \u0432\u0438\u0434\u0435\u043e \u0438\u0437 Instagram \u043f\u043e \u0441\u0441\u044b\u043b\u043a\u0435")
-        await bot.set_my_short_description("\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 IG \u0432\u0438\u0434\u0435\u043e")
+        await bot.set_my_description(BOT_RULES_SHORT)
+        await bot.set_my_short_description(BOT_RULES_SHORT[:120])
     except Exception as exc:
         logger.warning("Bot description failed: %s", exc)
 
@@ -27,6 +30,23 @@ async def configure_bot(bot: Bot) -> None:
         BotCommandScopeAllPrivateChats(),
     ):
         await bot.delete_my_commands(scope=scope)
+
+    url = settings.miniapp_url
+    if url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="⚙️ Триггеры",
+                    web_app=WebAppInfo(url=url),
+                )
+            )
+            logger.info("Menu WebApp (личка): %s", url)
+        except Exception as exc:
+            logger.warning("Menu WebApp failed: %s", exc)
+    else:
+        logger.warning(
+            "Mini App выключен: задай WEBHOOK_BASE_URL или PUBLIC_BASE_URL (HTTPS)"
+        )
 
     info = await bot.get_webhook_info()
     expected = settings.webhook_full_url
@@ -41,6 +61,6 @@ async def configure_bot(bot: Bot) -> None:
             logger.info("Webhook OK: %s pending=%s", info.url, info.pending_update_count)
     elif info.url:
         logger.warning(
-            "\u041d\u0430 \u0431\u043e\u0442\u0435 \u0432\u0438\u0441\u0438\u0442 webhook %s \u2014 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 polling \u043c\u043e\u0436\u0435\u0442 \u043d\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f",
+            "На боте висит webhook %s — локальный polling может не получать сообщения",
             info.url,
         )

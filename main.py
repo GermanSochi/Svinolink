@@ -4,17 +4,28 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message
 
 from admin_panel import router as admin_router
 from chat_handlers import (
     IG_LINK_FILTER,
+    SVIN_AI_FILTER,
+    SVIN_CAPTION_FILTER,
     handle_ig_text_callback,
     handle_instagram_link,
+    handle_svin_ai,
+    router as chat_router,
 )
+from chat_memory import close_chat_memory
+from memory_handlers import router as memory_router
 from config import settings
+from deps import gpt, store
 from middleware_log import LogUpdatesMiddleware
 from server_runner import run_polling_with_http, run_webhook_mode
+from skills_tools import router as skills_router
+from trigger_fsm import PRIVATE_GREET, router as trigger_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,12 +34,63 @@ logging.basicConfig(
 logger = logging.getLogger("svinolink")
 
 
+async def handle_triggers(message: Message, bot: Bot) -> None:
+    if not message.text or not message.from_user:
+        return
+    if message.text.startswith("/"):
+        return
+
+    cid = message.chat.id
+    if message.chat.type in {"group", "supergroup"}:
+        store.register_chat(cid, title=message.chat.title, chat_type=message.chat.type)
+    rules = store.load_triggers(cid)
+    rule = store.find_match(message.text, rules)
+    if not rule:
+        return
+
+    uid = message.from_user.id
+    if rule.once_per_day and store.was_used_today(cid, uid, rule.id):
+        return
+
+    try:
+        await bot.send_message(
+            cid,
+            rule.response,
+            reply_to_message_id=message.message_id,
+        )
+        if rule.once_per_day:
+            store.mark_used_today(cid, uid, rule.id)
+    except Exception as exc:
+        logger.warning("trigger send failed: %s", exc)
+
+
+async def cmd_start(message: Message, bot: Bot) -> None:
+    await bot.send_message(message.chat.id, PRIVATE_GREET)
+
+
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(LogUpdatesMiddleware())
+    if settings.skills_tools_enabled:
+        dp.include_router(skills_router)
     dp.message.register(handle_instagram_link, IG_LINK_FILTER)
     dp.callback_query.register(handle_ig_text_callback, F.data.startswith("igtxt:"))
+    if settings.memory_enabled:
+        dp.include_router(memory_router)
+    dp.message.register(handle_svin_ai, *SVIN_AI_FILTER)
+    dp.message.register(handle_svin_ai, *SVIN_CAPTION_FILTER)
+    dp.include_router(trigger_router)
+    dp.include_router(chat_router)
     dp.include_router(admin_router)
+
+    dp.message.register(cmd_start, CommandStart(), F.chat.type == "private")
+    dp.message.register(
+        handle_triggers,
+        StateFilter(None),
+        F.text,
+        ~F.text.startswith("/"),
+        ~F.text.regexp(r"(?i)instagram\.com"),
+    )
     return dp
 
 
@@ -47,6 +109,8 @@ async def main() -> None:
         else:
             await run_polling_with_http(bot, dp)
     finally:
+        await close_chat_memory()
+        await gpt.close()
         await bot.session.close()
 
 

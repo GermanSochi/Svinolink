@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # true / 1 / yes — бот не трогает Instagram (ни cookies, ни логин)
     instagram_paused: bool = Field(default=False, alias="INSTAGRAM_PAUSED")
 
+    # --- Feature flags (все по умолчанию выключены) ---
+    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
+    web_search_enabled: bool = Field(default=False, alias="WEB_SEARCH_ENABLED")
+    games_enabled: bool = Field(default=False, alias="GAMES_ENABLED")
+    memory_enabled: bool = Field(default=False, alias="MEMORY_ENABLED")
+    skills_tools_enabled: bool = Field(default=False, alias="SKILLS_TOOLS_ENABLED")
+
     @field_validator("instagram_paused", mode="before")
     @classmethod
     def parse_instagram_paused(cls, v: object) -> bool:
@@ -112,6 +119,13 @@ class Settings(BaseSettings):
             else:
                 self._app_version_cache = "dev"
         return self._app_version_cache
+
+    @property
+    def miniapp_url(self) -> str:
+        base = self.app_base_url
+        if not base:
+            return ""
+        return f"{base}/miniapp?v={self.app_version}"
 
     @property
     def webhook_route(self) -> str:

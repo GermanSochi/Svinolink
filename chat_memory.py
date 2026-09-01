@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
 
+import asyncpg
+
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-_pool = None  # asyncpg.Pool | None — lazy import
+_pool: asyncpg.Pool | None = None
 _pool_init_failed: bool = False
 
 CREATE_TABLE_SQL = """
