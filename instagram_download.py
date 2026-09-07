@@ -316,6 +316,15 @@ def _dest_path() -> Path:
     return _downloads_dir() / f"{uuid.uuid4().hex}.mp4"
 
 
+def _dest_path_image() -> Path:
+    return _downloads_dir() / f"{uuid.uuid4().hex}.jpg"
+
+
+def is_photo_file(path: Path) -> bool:
+    """Check if downloaded file is an image based on extension."""
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+
+
 # ── Private API: самый быстрый путь ──────────────────────────────────
 
 _SHORTCODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -443,8 +452,32 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
                     break
 
         if not video_url:
-            logger.info("private API: no video URL in response for %s", shortcode)
-            return None
+            # ═══ IMAGE (photo / image-only carousel) ═══
+            image_url = None
+            candidates = media.get("image_versions2", {}).get("candidates", [])
+            if candidates:
+                image_url = candidates[0].get("url")
+            if not image_url:
+                for item in carousel:
+                    img_candidates = item.get("image_versions2", {}).get("candidates", [])
+                    if img_candidates:
+                        image_url = img_candidates[0].get("url")
+                        break
+            if not image_url:
+                logger.info("private API: no video or image URL for %s", shortcode)
+                return None
+            dest = _dest_path_image()
+            with requests.get(image_url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
+                dl.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                        f.write(chunk)
+            if dest.stat().st_size < 1024:
+                dest.unlink(missing_ok=True)
+                return None
+            check_file_size(dest, source_url=url)
+            logger.info("private-api OK (photo) %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+            return dest, caption
 
         # Скачиваем видео напрямую по URL → на диск
         dest = _dest_path()

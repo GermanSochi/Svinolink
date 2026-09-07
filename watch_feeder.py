@@ -566,11 +566,11 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Download reel and send as video. Skip silently if download fails."""
+    """Download reel and send as video/photo. Skip silently if download fails."""
     from instagram_download import (
         download_instagram_video, remove_file,
         DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
-        TELEGRAM_MAX_BYTES,
+        TELEGRAM_MAX_BYTES, is_photo_file,
     )
     from aiogram.types import FSInputFile
 
@@ -595,14 +595,21 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
         remove_file(file_path)
         return False
 
+    photo = is_photo_file(file_path)
     sent = False
     for cid in chat_ids:
         try:
-            await bot.send_video(
-                chat_id=cid,
-                video=FSInputFile(file_path),
-                supports_streaming=True,
-            )
+            if photo:
+                await bot.send_photo(
+                    chat_id=cid,
+                    photo=FSInputFile(file_path),
+                )
+            else:
+                await bot.send_video(
+                    chat_id=cid,
+                    video=FSInputFile(file_path),
+                    supports_streaming=True,
+                )
             sent = True
         except Exception as exc:
             logger.warning("watch_feed: send to %s failed: %s", cid, exc)

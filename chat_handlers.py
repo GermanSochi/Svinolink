@@ -145,7 +145,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         chat_type=message.chat.type,
     )
 
-    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file
+    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file, is_photo_file
     from instagram_urls import is_instagram_media_url
 
     clean_url = url_from_message(message)
@@ -159,9 +159,6 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         return
 
     logger.info("IG clean_url=%s", clean_url)
-
-    _AD_TEXT = "💰 Донаты приветствуются"
-    _AD_LINK = "https://clck.ru/3UaRGo"
 
     MAX_DOWNLOAD_RETRIES = 3
     RETRY_DELAY_SEC = 5
@@ -186,17 +183,21 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
             # Отправка в Telegram — до 2 попыток при timeout
             sent_msg = None
+            photo = is_photo_file(file_path)
             for attempt in range(2):
                 try:
-                    video_caption = f"{_AD_TEXT}\n{_AD_LINK}"
-
-                    if caption.strip():
+                    if photo:
+                        sent_msg = await message.answer_photo(
+                            photo=FSInputFile(file_path),
+                            reply_to_message_id=message.message_id,
+                        )
+                    else:
                         sent_msg = await message.answer_video(
                             video=FSInputFile(file_path),
-                            caption=video_caption,
                             reply_to_message_id=message.message_id,
                             supports_streaming=True,
                         )
+                    if caption.strip():
                         cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
                         _ig_caption_cache[cache_key] = caption
                         if len(_ig_caption_cache) > 100:
@@ -204,16 +205,9 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                             for k in old_keys:
                                 _ig_caption_cache.pop(k, None)
                         kb = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="📝", callback_data=f"igtxt:{cache_key}")]
+                            [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
                         ])
                         await sent_msg.edit_reply_markup(reply_markup=kb)
-                    else:
-                        sent_msg = await message.answer_video(
-                            video=FSInputFile(file_path),
-                            caption=video_caption,
-                            reply_to_message_id=message.message_id,
-                            supports_streaming=True,
-                        )
                     break
                 except Exception as e:
                     if "timeout" in str(e).lower() and attempt < 1:
