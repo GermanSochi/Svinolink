@@ -8,7 +8,7 @@ import io
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, Message
 
 import ai_quota
 from config import settings
@@ -183,14 +183,28 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
             sent_ok = False  # флаг: успешно ли отправлен контент
 
-            # ── Carousel: несколько фото → send_media_group ──
-            if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+            # ── Кнопка «Описание» — встраиваем в сообщение с медиа ──
+            kb = None
+            if caption.strip():
+                cache_key = f"{message.chat.id}:{message.message_id}:{clean_url}"
+                _ig_caption_cache[cache_key] = caption
+                if len(_ig_caption_cache) > 100:
+                    old_keys = list(_ig_caption_cache.keys())[:50]
+                    for k in old_keys:
+                        _ig_caption_cache.pop(k, None)
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
+                ])
+
+            # ── Carousel: несколько файлов → send_media_group (фото + видео) ──
+            if len(file_paths) > 1:
                 media = []
                 for i, p in enumerate(file_paths[:10]):  # Telegram max 10
                     kw: dict = {"media": FSInputFile(p)}
-                    if i == 0 and caption.strip():
-                        kw["caption"] = caption
-                    media.append(InputMediaPhoto(**kw))
+                    if is_photo_file(p):
+                        media.append(InputMediaPhoto(**kw))
+                    else:
+                        media.append(InputMediaVideo(**kw))
                 for attempt in range(2):
                     try:
                         await message.answer_media_group(
@@ -205,8 +219,14 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                             await asyncio.sleep(2)
                             continue
                         raise
+                # Кнопка для карусели — отдельным сообщением (media_group не поддерживает reply_markup)
+                if sent_ok and kb:
+                    try:
+                        await message.answer("📝", reply_markup=kb, reply_to_message_id=message.message_id)
+                    except Exception as btn_err:
+                        logger.warning("carousel caption button failed (non-fatal): %s", btn_err)
 
-            # ── Single file: видео или одно фото ──
+            # ── Single file: видео или одно фото (кнопка прямо на сообщении) ──
             else:
                 file_path = file_paths[0]
                 photo = is_photo_file(file_path)
@@ -216,12 +236,14 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                             await message.answer_photo(
                                 photo=FSInputFile(file_path),
                                 reply_to_message_id=message.message_id,
+                                reply_markup=kb,
                             )
                         else:
                             await message.answer_video(
                                 video=FSInputFile(file_path),
                                 reply_to_message_id=message.message_id,
                                 supports_streaming=True,
+                                reply_markup=kb,
                             )
                         sent_ok = True
                         break
@@ -235,26 +257,6 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                             await asyncio.sleep(2)
                             continue
                         raise
-
-            # ── Кнопка «Описание» — отдельным сообщением (всегда нефатально) ──
-            if sent_ok and caption.strip():
-                try:
-                    cache_key = f"{message.chat.id}:{message.message_id}:{clean_url}"
-                    _ig_caption_cache[cache_key] = caption
-                    if len(_ig_caption_cache) > 100:
-                        old_keys = list(_ig_caption_cache.keys())[:50]
-                        for k in old_keys:
-                            _ig_caption_cache.pop(k, None)
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
-                    ])
-                    await message.answer(
-                        "📝 Описание поста:",
-                        reply_markup=kb,
-                        reply_to_message_id=message.message_id,
-                    )
-                except Exception as btn_err:
-                    logger.warning("caption button failed (non-fatal): %s", btn_err)
 
             # Успех — выходим
             last_error = None

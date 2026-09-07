@@ -707,7 +707,7 @@ def check_file_size(path: Path, *, source_url: str = "") -> None:
 
 
 def _download_instagram_video_once(clean: str) -> Path:
-    """Скачивание через instagrapi: clip → video → photo."""
+    """Скачивание одиночного медиа через instagrapi: clip → video → photo."""
     cl = _get_client()
     if cl.user_id is None and _cookies_file().is_file():
         raise RuntimeError(COOKIES_EXPIRED_MSG)
@@ -740,7 +740,7 @@ def _download_instagram_video_once(clean: str) -> Path:
             raise
         logger.info("video_download failed, trying photo_download: %s", exc)
 
-    # Фото-посты: instagrapi.photo_download
+    # Одиночные фото: photo_download работает только для media_type=1
     raw_path = cl.photo_download(media_pk, folder=folder)
     # Сохраняем с правильным расширением (не .mp4!)
     suffix = Path(raw_path).suffix or ".jpg"
@@ -749,6 +749,70 @@ def _download_instagram_video_once(clean: str) -> Path:
     check_file_size(dest, source_url=clean)
     logger.info("instagrapi photo OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
     return dest
+
+
+def _download_instagram_carousel_via_instagrapi(clean: str) -> list[Path] | None:
+    """Скачивание карусели через instagrapi.media_info → resources.
+
+    media_type=8 (carousel) не поддерживается clip/video/photo_download.
+    Используем media_info().resources и скачиваем каждый элемент по URL.
+    Возвращает list[Path] или None.
+    """
+    cl = _get_client()
+    if cl.user_id is None and _cookies_file().is_file():
+        raise RuntimeError(COOKIES_EXPIRED_MSG)
+
+    media_pk = cl.media_pk_from_url(clean)
+    media = cl.media_info(media_pk)
+
+    # Не карусель — None (пусть другие пути обработают)
+    if not media.resources:
+        return None
+
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android",
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+    }
+
+    paths: list[Path] = []
+
+    for idx, resource in enumerate(media.resources):
+        try:
+            url = None
+            is_video = False
+            if resource.video_url:
+                url = str(resource.video_url)
+                is_video = True
+            elif resource.thumbnail_url:
+                url = str(resource.thumbnail_url)
+
+            if not url:
+                logger.warning("carousel item %d has no URL for %s", idx, clean)
+                continue
+
+            dest = _dest_path() if is_video else _dest_path_image()
+            with requests.get(url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
+                dl.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                        f.write(chunk)
+
+            if dest.stat().st_size < 1024:
+                dest.unlink(missing_ok=True)
+                continue
+            check_file_size(dest, source_url=clean)
+            paths.append(dest)
+        except Exception as exc:
+            logger.warning("carousel item %d download failed for %s: %s", idx, clean, exc)
+            continue
+
+    if not paths:
+        logger.warning("instagrapi carousel: 0 items downloaded for %s", clean)
+        return None
+
+    logger.info("instagrapi carousel OK %s: %d items (%d bytes total)", clean, len(paths), sum(p.stat().st_size for p in paths))
+    return paths
 
 
 def _fetch_caption_only(url: str) -> str:
@@ -870,7 +934,17 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
-    # Путь 4: instagrapi — последний fallback
+    # Путь 4: instagrapi — карусели (clip/video/photo_download НЕ работают для media_type=8)
+    try:
+        carousel_paths = _download_instagram_carousel_via_instagrapi(clean)
+        if carousel_paths:
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi-carousel", size=sum(p.stat().st_size for p in carousel_paths), elapsed_ms=ms, ts=time.time()))
+            return carousel_paths, fallback_caption
+    except Exception as exc:
+        logger.warning("instagrapi carousel failed: %s", exc)
+
+    # Путь 5: instagrapi — одиночные медиа (clip → video → photo)
     from instagrapi.exceptions import ClientError
 
     last_exc: Exception | None = None
