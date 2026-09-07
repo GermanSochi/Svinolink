@@ -511,8 +511,8 @@ def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
 # ── yt-dlp: быстрое извлечение прямой ссылки ──────────────────────────
 
 
-def _ytdlp_extract_url(url: str) -> str | None:
-    """Извлекает прямую ссылку на видео через yt-dlp (без скачивания)."""
+def _ytdlp_extract_info(url: str) -> dict | None:
+    """Извлекает JSON-метаданные через yt-dlp (url + description)."""
     try:
         cmd = [
             "yt-dlp",
@@ -538,20 +538,34 @@ def _ytdlp_extract_url(url: str) -> str | None:
         if result.returncode != 0:
             logger.info("yt-dlp extract failed: %s", result.stderr[:200])
             return None
-
-        info = json.loads(result.stdout)
-        video_url = info.get("url")
-        if not video_url:
-            formats = info.get("formats", [])
-            if formats:
-                # Берём лучший MP4-формат
-                mp4s = [f for f in formats if f.get("vcodec", "none") != "none"]
-                if mp4s:
-                    video_url = mp4s[-1].get("url")
-        return video_url
+        return json.loads(result.stdout)
     except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
         logger.info("yt-dlp extract error: %s", exc)
         return None
+
+
+def _ytdlp_extract_url(url: str) -> str | None:
+    """Извлекает прямую ссылку на видео через yt-dlp (без скачивания)."""
+    info = _ytdlp_extract_info(url)
+    if not info:
+        return None
+    video_url = info.get("url")
+    if not video_url:
+        formats = info.get("formats", [])
+        if formats:
+            # Берём лучший MP4-формат
+            mp4s = [f for f in formats if f.get("vcodec", "none") != "none"]
+            if mp4s:
+                video_url = mp4s[-1].get("url")
+    return video_url
+
+
+def _ytdlp_extract_caption(url: str) -> str:
+    """Извлекает описание/подпись поста через yt-dlp."""
+    info = _ytdlp_extract_info(url)
+    if not info:
+        return ""
+    return info.get("description", "") or ""
 
 
 def _download_direct_url(direct_url: str, dest: Path) -> None:
@@ -819,12 +833,23 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Private API не дал файл — пробуем получить caption отдельно (для кнопки «Описание»)
+    # Private API не дал файл — пробуем получить caption из других источников
+    # Источник 1: yt-dlp JSON (независимый от private API)
     fallback_caption = ""
     try:
-        fallback_caption = _fetch_caption_only(clean)
+        fallback_caption = _ytdlp_extract_caption(clean)
+        if fallback_caption:
+            logger.info("caption from ytdlp: %d chars", len(fallback_caption))
     except Exception:
         pass
+    # Источник 2: private API (если yt-dlp не дал caption)
+    if not fallback_caption:
+        try:
+            fallback_caption = _fetch_caption_only(clean)
+            if fallback_caption:
+                logger.info("caption from private-api: %d chars", len(fallback_caption))
+        except Exception:
+            pass
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
