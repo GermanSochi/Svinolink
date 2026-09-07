@@ -375,12 +375,12 @@ def _load_cookies_dict() -> dict[str, str]:
     return _load_cookies_from_env() or {}
 
 
-def _download_via_private_api(url: str) -> tuple[Path, str] | None:
+def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
     """
     Прямой путь: shortcode → media_id → /api/v1/media/{id}/info/
     → прямая ссылка на видео → stream в память → запись на диск.
     Самый быстрый метод (~0.5-2с на скачивание).
-    Возвращает (path, caption).
+    Возвращает ([path, ...], caption).
     """
     import re
     from urllib.parse import urlparse, parse_qs
@@ -453,31 +453,40 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
 
         if not video_url:
             # ═══ IMAGE (photo / image-only carousel) ═══
-            image_url = None
-            candidates = media.get("image_versions2", {}).get("candidates", [])
-            if candidates:
-                image_url = candidates[0].get("url")
-            if not image_url:
+            image_urls: list[str] = []
+            # Собираем ВСЕ изображения из карусели
+            carousel = media.get("carousel_media", [])
+            if carousel:
                 for item in carousel:
                     img_candidates = item.get("image_versions2", {}).get("candidates", [])
                     if img_candidates:
-                        image_url = img_candidates[0].get("url")
-                        break
-            if not image_url:
+                        image_urls.append(img_candidates[0]["url"])
+            if not image_urls:
+                # Одиночное фото (не карусель)
+                candidates = media.get("image_versions2", {}).get("candidates", [])
+                if candidates:
+                    image_urls.append(candidates[0]["url"])
+            if not image_urls:
                 logger.info("private API: no video or image URL for %s", shortcode)
                 return None
-            dest = _dest_path_image()
-            with requests.get(image_url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
-                dl.raise_for_status()
-                with open(dest, "wb") as f:
-                    for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                        f.write(chunk)
-            if dest.stat().st_size < 1024:
-                dest.unlink(missing_ok=True)
+            # Скачиваем ВСЕ изображения
+            dests: list[Path] = []
+            for img_url in image_urls:
+                dest = _dest_path_image()
+                with requests.get(img_url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
+                    dl.raise_for_status()
+                    with open(dest, "wb") as f:
+                        for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            f.write(chunk)
+                if dest.stat().st_size < 1024:
+                    dest.unlink(missing_ok=True)
+                    continue
+                check_file_size(dest, source_url=url)
+                dests.append(dest)
+            if not dests:
                 return None
-            check_file_size(dest, source_url=url)
-            logger.info("private-api OK (photo) %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
-            return dest, caption
+            logger.info("private-api OK (photo x%d) %s (%s bytes total)", len(dests), url, sum(d.stat().st_size for d in dests))
+            return dests, caption
 
         # Скачиваем видео напрямую по URL → на диск
         dest = _dest_path()
@@ -493,7 +502,7 @@ def _download_via_private_api(url: str) -> tuple[Path, str] | None:
 
         check_file_size(dest, source_url=url)
         logger.info("private-api OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
-        return dest, caption
+        return [dest], caption
     except Exception as exc:
         logger.info("private API failed for %s: %s", url, exc)
         return None
@@ -707,10 +716,10 @@ def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
-def download_instagram_video(url: str) -> tuple[Path, str]:
+def download_instagram_video(url: str) -> tuple[list[Path], str]:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
-    Возвращает (path, caption).
+    Возвращает ([path, ...], caption).
     """
     from bot_stats import DownloadStat, bot_stats
 
@@ -728,10 +737,10 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
     try:
         result = _download_via_private_api(clean)
         if result:
-            path, caption = result
+            paths, caption = result
             ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path, caption
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="private-api", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+            return paths, caption
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
@@ -741,7 +750,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         if path:
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path, ""
+            return [path], ""
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
 
@@ -750,7 +759,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
         path = _download_ytdlp_fallback(clean)
         ms = int((time.monotonic() - t0) * 1000)
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-        return path, ""
+        return [path], ""
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
@@ -763,7 +772,7 @@ def download_instagram_video(url: str) -> tuple[Path, str]:
             path = _download_instagram_video_once(clean)
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return path, ""
+            return [path], ""
         except ValueError:
             raise
         except RuntimeError:
@@ -804,3 +813,11 @@ def remove_file(path: Path | None) -> None:
             path.unlink(missing_ok=True)
     except OSError as exc:
         logger.warning("remove_file %s: %s", path, exc)
+
+
+def remove_files(paths: list[Path] | None) -> None:
+    """Удаляет список файлов (для каруселей)."""
+    if not paths:
+        return
+    for p in paths:
+        remove_file(p)

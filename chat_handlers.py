@@ -8,7 +8,7 @@ import io
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 import ai_quota
 from config import settings
@@ -145,7 +145,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         chat_type=message.chat.type,
     )
 
-    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_file, is_photo_file
+    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_files, is_photo_file
     from instagram_urls import is_instagram_media_url
 
     clean_url = url_from_message(message)
@@ -165,60 +165,98 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
     last_error: Exception | None = None
 
     for download_attempt in range(MAX_DOWNLOAD_RETRIES):
-        file_path = None
+        file_paths: list | None = None
         try:
             from instagram_download import _download_semaphore
             async with _download_semaphore:
-                file_path, caption = await asyncio.wait_for(
+                file_paths, caption = await asyncio.wait_for(
                     asyncio.to_thread(download_instagram_video, clean_url),
                     timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
                 )
 
-            size = os.path.getsize(file_path)
-            if size > TELEGRAM_MAX_BYTES:
-                remove_file(file_path)
-                file_path = None
+            total_size = sum(os.path.getsize(p) for p in file_paths)
+            if total_size > TELEGRAM_MAX_BYTES:
+                remove_files(file_paths)
+                file_paths = None
                 await message.answer(video_too_heavy_message(clean_url))
                 return
 
-            # Отправка в Telegram — до 2 попыток при timeout
-            sent_msg = None
-            photo = is_photo_file(file_path)
-            for attempt in range(2):
-                try:
-                    if photo:
-                        sent_msg = await message.answer_photo(
-                            photo=FSInputFile(file_path),
+            # ── Carousel: несколько фото → send_media_group ──
+            if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+                media = []
+                for i, p in enumerate(file_paths[:10]):  # Telegram max 10
+                    kw: dict = {"media": FSInputFile(p)}
+                    if i == 0 and caption.strip():
+                        kw["caption"] = caption
+                    media.append(InputMediaPhoto(**kw))
+                sent_msgs = []
+                for attempt in range(2):
+                    try:
+                        sent_msgs = await message.answer_media_group(
+                            media=media,
                             reply_to_message_id=message.message_id,
                         )
-                    else:
-                        sent_msg = await message.answer_video(
-                            video=FSInputFile(file_path),
-                            reply_to_message_id=message.message_id,
-                            supports_streaming=True,
-                        )
-                    if caption.strip():
-                        cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
-                        _ig_caption_cache[cache_key] = caption
-                        if len(_ig_caption_cache) > 100:
-                            old_keys = list(_ig_caption_cache.keys())[:50]
-                            for k in old_keys:
-                                _ig_caption_cache.pop(k, None)
-                        kb = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
-                        ])
-                        await sent_msg.edit_reply_markup(reply_markup=kb)
-                    break
-                except Exception as e:
-                    if "timeout" in str(e).lower() and attempt < 1:
-                        logger.warning(
-                            "telegram upload timeout attempt %s/2: %s",
-                            attempt + 1,
-                            e,
-                        )
-                        await asyncio.sleep(2)
-                        continue
-                    raise
+                        break
+                    except Exception as e:
+                        if "timeout" in str(e).lower() and attempt < 1:
+                            logger.warning("tg media group timeout attempt %s/2: %s", attempt + 1, e)
+                            await asyncio.sleep(2)
+                            continue
+                        raise
+                # Caption кнопка — на первом фото
+                if caption.strip() and sent_msgs:
+                    first = sent_msgs[0]
+                    cache_key = f"{first.chat.id}:{first.message_id}"
+                    _ig_caption_cache[cache_key] = caption
+                    if len(_ig_caption_cache) > 100:
+                        old_keys = list(_ig_caption_cache.keys())[:50]
+                        for k in old_keys:
+                            _ig_caption_cache.pop(k, None)
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
+                    ])
+                    await first.edit_reply_markup(reply_markup=kb)
+
+            # ── Single file: видео или одно фото ──
+            else:
+                file_path = file_paths[0]
+                sent_msg = None
+                photo = is_photo_file(file_path)
+                for attempt in range(2):
+                    try:
+                        if photo:
+                            sent_msg = await message.answer_photo(
+                                photo=FSInputFile(file_path),
+                                reply_to_message_id=message.message_id,
+                            )
+                        else:
+                            sent_msg = await message.answer_video(
+                                video=FSInputFile(file_path),
+                                reply_to_message_id=message.message_id,
+                                supports_streaming=True,
+                            )
+                        if caption.strip():
+                            cache_key = f"{sent_msg.chat.id}:{sent_msg.message_id}"
+                            _ig_caption_cache[cache_key] = caption
+                            if len(_ig_caption_cache) > 100:
+                                old_keys = list(_ig_caption_cache.keys())[:50]
+                                for k in old_keys:
+                                    _ig_caption_cache.pop(k, None)
+                            kb = InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
+                            ])
+                            await sent_msg.edit_reply_markup(reply_markup=kb)
+                        break
+                    except Exception as e:
+                        if "timeout" in str(e).lower() and attempt < 1:
+                            logger.warning(
+                                "telegram upload timeout attempt %s/2: %s",
+                                attempt + 1,
+                                e,
+                            )
+                            await asyncio.sleep(2)
+                            continue
+                        raise
 
             # Успех — выходим
             last_error = None
@@ -243,9 +281,9 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 await asyncio.sleep(RETRY_DELAY_SEC)
                 continue
         finally:
-            if file_path is not None:
+            if file_paths is not None:
                 try:
-                    remove_file(file_path)
+                    remove_files(file_paths)
                 except Exception:
                     pass
 

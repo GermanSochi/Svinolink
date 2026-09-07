@@ -566,55 +566,67 @@ async def _fetch_keyword(keyword: str, top_n: int = 10) -> list[dict]:
 # ── Post videos ──
 
 async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
-    """Download reel and send as video/photo. Skip silently if download fails."""
+    """Download reel and send as video/photo carousel. Skip silently if download fails."""
     from instagram_download import (
-        download_instagram_video, remove_file,
+        download_instagram_video, remove_files,
         DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
         TELEGRAM_MAX_BYTES, is_photo_file,
     )
-    from aiogram.types import FSInputFile
+    from aiogram.types import FSInputFile, InputMediaPhoto
 
     sc = item["shortcode"]
     link = f"https://www.instagram.com/reel/{sc}/"
-    file_path = None
+    file_paths: list | None = None
 
     try:
         logger.info("watch_feed: downloading %s", sc)
         async with _download_semaphore:
-            file_path, _ = await asyncio.wait_for(
+            file_paths, _ = await asyncio.wait_for(
                 asyncio.to_thread(download_instagram_video, link),
                 timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
             )
 
-        if file_path.stat().st_size > TELEGRAM_MAX_BYTES:
+        total_size = sum(p.stat().st_size for p in file_paths)
+        if total_size > TELEGRAM_MAX_BYTES:
             logger.warning("watch_feed: %s too large", sc)
-            remove_file(file_path)
+            remove_files(file_paths)
             return False
     except Exception as exc:
         logger.warning("watch_feed: download failed %s: %s", sc, exc)
-        remove_file(file_path)
+        remove_files(file_paths)
         return False
 
-    photo = is_photo_file(file_path)
     sent = False
-    for cid in chat_ids:
-        try:
-            if photo:
-                await bot.send_photo(
-                    chat_id=cid,
-                    photo=FSInputFile(file_path),
-                )
-            else:
-                await bot.send_video(
-                    chat_id=cid,
-                    video=FSInputFile(file_path),
-                    supports_streaming=True,
-                )
-            sent = True
-        except Exception as exc:
-            logger.warning("watch_feed: send to %s failed: %s", cid, exc)
+    # Carousel: несколько фото → media group
+    if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+        for cid in chat_ids:
+            try:
+                media = [InputMediaPhoto(media=FSInputFile(p)) for p in file_paths[:10]]
+                await bot.send_media_group(chat_id=cid, media=media)
+                sent = True
+            except Exception as exc:
+                logger.warning("watch_feed: media_group to %s failed: %s", cid, exc)
+    else:
+        file_path = file_paths[0]
+        photo = is_photo_file(file_path)
+        for cid in chat_ids:
+            try:
+                if photo:
+                    await bot.send_photo(
+                        chat_id=cid,
+                        photo=FSInputFile(file_path),
+                    )
+                else:
+                    await bot.send_video(
+                        chat_id=cid,
+                        video=FSInputFile(file_path),
+                        supports_streaming=True,
+                    )
+                sent = True
+            except Exception as exc:
+                logger.warning("watch_feed: send to %s failed: %s", cid, exc)
 
-    remove_file(file_path)
+    remove_files(file_paths)
     return sent
 
 
