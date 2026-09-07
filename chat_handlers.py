@@ -203,7 +203,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                             await asyncio.sleep(2)
                             continue
                         raise
-                # Caption кнопка — на первом фото
+                # Caption кнопка — отдельным сообщением (media group не поддерживает edit_reply_markup)
                 if caption.strip() and sent_msgs:
                     first = sent_msgs[0]
                     cache_key = f"{first.chat.id}:{first.message_id}"
@@ -215,7 +215,11 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                     kb = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
                     ])
-                    await first.edit_reply_markup(reply_markup=kb)
+                    await message.answer(
+                        "📎 Карусель из Instagram",
+                        reply_markup=kb,
+                        reply_to_message_id=message.message_id,
+                    )
 
             # ── Single file: видео или одно фото ──
             else:
