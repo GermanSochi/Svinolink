@@ -737,6 +737,60 @@ def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
+def _fetch_caption_only(url: str) -> str:
+    """Быстро получить caption через private API без скачивания файла."""
+    import re
+    from urllib.parse import urlparse, parse_qs
+
+    cookies = _load_cookies_dict()
+    if not cookies.get("sessionid"):
+        return ""
+
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android",
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+        "Accept-Language": "en-US",
+    }
+
+    is_story = "/stories/" in url or "/s/" in url
+    if is_story:
+        m = re.search(r"/stories/[^/]+/(\d+)", url)
+        if m:
+            story_id = m.group(1)
+        else:
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            story_id = qs.get("story_media_id", [None])[0]
+            if not story_id:
+                m = re.search(r"/s/(\d+)", url)
+                story_id = m.group(1) if m else None
+        if not story_id:
+            return ""
+        api_url = f"https://i.instagram.com/api/v1/media/{story_id}/info/"
+    else:
+        shortcode = _extract_shortcode(url)
+        if not shortcode:
+            return ""
+        media_id = _shortcode_to_media_id(shortcode)
+        api_url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
+
+    try:
+        resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=8, proxies=PROXIES)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        media = data.get("items", [{}])[0]
+        caption_obj = media.get("caption")
+        if isinstance(caption_obj, dict):
+            return caption_obj.get("text", "")
+        elif isinstance(caption_obj, str):
+            return caption_obj
+    except Exception:
+        pass
+    return ""
+
+
 def download_instagram_video(url: str) -> tuple[list[Path], str]:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
@@ -765,13 +819,20 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
+    # Private API не дал файл — пробуем получить caption отдельно (для кнопки «Описание»)
+    fallback_caption = ""
+    try:
+        fallback_caption = _fetch_caption_only(clean)
+    except Exception:
+        pass
+
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
         path = _download_ytdlp_fast(clean)
         if path:
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return [path], ""
+            return [path], fallback_caption
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
 
@@ -780,7 +841,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
         path = _download_ytdlp_fallback(clean)
         ms = int((time.monotonic() - t0) * 1000)
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-        return [path], ""
+        return [path], fallback_caption
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
@@ -793,7 +854,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
             path = _download_instagram_video_once(clean)
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return [path], ""
+            return [path], fallback_caption
         except ValueError:
             raise
         except RuntimeError:
