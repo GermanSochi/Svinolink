@@ -925,16 +925,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
 
-    # Путь 3: yt-dlp полный fallback (~3-8с)
-    try:
-        path = _download_ytdlp_fallback(clean)
-        ms = int((time.monotonic() - t0) * 1000)
-        bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-        return [path], fallback_caption
-    except Exception as exc:
-        logger.warning("ytdlp-fallback failed: %s", exc)
-
-    # Путь 4: instagrapi — карусели (clip/video/photo_download НЕ работают для media_type=8)
+    # Путь 3: instagrapi — ПЕРЕД yt-dlp fallback (yt-dlp 60с висит на фото-постах)
     try:
         carousel_paths = _download_instagram_carousel_via_instagrapi(clean)
         if carousel_paths:
@@ -944,7 +935,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("instagrapi carousel failed: %s", exc)
 
-    # Путь 5: instagrapi — одиночные медиа (clip → video → photo)
+    # Путь 4: instagrapi — одиночные медиа (clip → video → photo)
     from instagrapi.exceptions import ClientError
 
     last_exc: Exception | None = None
@@ -980,6 +971,15 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=False, method="instagrapi", size=0, elapsed_ms=ms, ts=time.time(), error=str(exc)[:120]))
             raise _runtime_error_for(exc) from exc
+
+    # Путь 5: yt-dlp полный fallback (медленный — ~60с, последний шанс для видео)
+    try:
+        path = _download_ytdlp_fallback(clean)
+        ms = int((time.monotonic() - t0) * 1000)
+        bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+        return [path], fallback_caption
+    except Exception as exc:
+        logger.warning("ytdlp-fallback failed: %s", exc)
 
     if last_exc is not None:
         raise _runtime_error_for(last_exc)
