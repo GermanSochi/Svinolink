@@ -693,6 +693,7 @@ def check_file_size(path: Path, *, source_url: str = "") -> None:
 
 
 def _download_instagram_video_once(clean: str) -> Path:
+    """Скачивание через instagrapi: clip → video → photo."""
     cl = _get_client()
     if cl.user_id is None and _cookies_file().is_file():
         raise RuntimeError(COOKIES_EXPIRED_MSG)
@@ -700,19 +701,39 @@ def _download_instagram_video_once(clean: str) -> Path:
     media_pk = cl.media_pk_from_url(clean)
     folder = _downloads_dir()
 
+    # Сначала пробуем видео/клипы
     try:
         raw_path = cl.clip_download(media_pk, folder=folder)
+        dest = _dest_path()  # .mp4
+        os.rename(str(raw_path), str(dest))
+        check_file_size(dest, source_url=clean)
+        logger.info("instagrapi clip OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
+        return dest
     except Exception as exc:
         if _is_timeout_error(exc):
             raise
-        logger.info("clip_download failed, trying video_download: %s", exc)
-        raw_path = cl.video_download(media_pk, folder=folder)
+        logger.info("clip_download failed: %s", exc)
 
-    # Переименовываем вместо копирования — экономим время и диск
-    dest = _dest_path()
+    try:
+        raw_path = cl.video_download(media_pk, folder=folder)
+        dest = _dest_path()  # .mp4
+        os.rename(str(raw_path), str(dest))
+        check_file_size(dest, source_url=clean)
+        logger.info("instagrapi video OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
+        return dest
+    except Exception as exc:
+        if _is_timeout_error(exc):
+            raise
+        logger.info("video_download failed, trying photo_download: %s", exc)
+
+    # Фото-посты: instagrapi.photo_download
+    raw_path = cl.photo_download(media_pk, folder=folder)
+    # Сохраняем с правильным расширением (не .mp4!)
+    suffix = Path(raw_path).suffix or ".jpg"
+    dest = _downloads_dir() / f"{uuid.uuid4().hex}{suffix}"
     os.rename(str(raw_path), str(dest))
     check_file_size(dest, source_url=clean)
-    logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
+    logger.info("instagrapi photo OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
     return dest
 
 
