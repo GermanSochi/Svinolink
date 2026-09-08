@@ -4,6 +4,24 @@
 
 ## 2026-09-08 — Фикс Instagram: карусели, фото, описание
 
+### Обновление (коммит `9e10636`) — Исправлена тихая ошибка для фото
+
+**Проблема:** после оптимизации (1 вызов yt-dlp вместо 3) фото-посты `/p/` полностью перестали реагировать — бот молча игнорировал ссылку.
+
+**Root cause:** 
+- Раньше: 3× yt-dlp = 60с → таймаут 45с → пользователь видел "сервер не дождался"  
+- Теперь: 1× yt-dlp = 10с → download завершается за <45с → instagrapi возвращает session error → `_runtime_error_for()` оборачивает в `COOKIES_EXPIRED_MSG` (содержит "сессия") → **handler молча выходит** (line 298: `return`) без сообщения пользователю!
+
+**Исправления:**
+1. **`chat_handlers.py`**: Убран silent return при cookies/session ошибках — теперь пользователь ВСЕГДА получает сообщение через `map_instagram_error()` ( Pig emoji: "Instagram не пускает — сессия протухла")
+2. **`instagram_download.py`**: Добавлен `Referer: https://www.instagram.com/` заголовок для:
+   - Private API запросов (фото CDN может требовать Referer)
+   - `_download_direct_url()` (yt-dlp image path)
+   - Carousel downloads через instagrapi
+3. **Логирование**: Добавлен лог `download_instagram_video START` и `ytdlp image URL found` для отладки
+
+---
+
 ### Обновление (коммит `12c5ae1`) — Устранена главная причина зависания
 
 **Проблема:** предыдущий фикс не помог — yt-dlp вызывался **3 РАЗА** (caption + fast + image), каждый subprocess таймаут 20с = 60с только на yt-dlp, плюс private API и instagrapi → суммарно > 45с таймаута.
