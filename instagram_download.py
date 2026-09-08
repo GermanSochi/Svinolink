@@ -541,7 +541,7 @@ def _ytdlp_extract_info(url: str) -> dict | None:
             cmd,
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=10,
         )
         if result.returncode != 0:
             logger.info("yt-dlp extract failed: %s", result.stderr[:200])
@@ -908,11 +908,32 @@ def _fetch_caption_only(url: str) -> str:
     return ""
 
 
+def _extract_url_from_ytdlp_info(info: dict) -> str | None:
+    """Извлекает прямую ссылку на видео из yt-dlp JSON."""
+    video_url = info.get("url")
+    if video_url:
+        return video_url
+    formats = info.get("formats", [])
+    if formats:
+        mp4s = [f for f in formats if f.get("vcodec", "none") != "none"]
+        if mp4s:
+            return mp4s[-1].get("url")
+    return None
+
+
+def _extract_image_url_from_ytdlp_info(info: dict) -> str | None:
+    """Извлекает URL изображения из yt-dlp JSON."""
+    thumb = info.get("thumbnail")
+    if thumb:
+        return thumb
+    for fmt in info.get("formats", []):
+        if fmt.get("vcodec", "none") == "none" and fmt.get("url"):
+            return fmt["url"]
+    return None
+
+
 def download_instagram_video(url: str) -> tuple[list[Path], str]:
-    """
-    Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
-    Возвращает ([path, ...], caption).
-    """
+    """Скачивание Instagram media: private API → yt-dlp (1 вызов!) → instagrapi."""
     from bot_stats import DownloadStat, bot_stats
 
     t0 = time.monotonic()
@@ -925,7 +946,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/, /p/, /stories/ или /s/")
 
-    # Путь 1: Instagram private API — напрямую (~0.5-2с)
+    # ── Путь 1: Instagram private API (~0.5-2с) ──
     try:
         result = _download_via_private_api(clean)
         if result:
@@ -936,45 +957,58 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Private API не дал файл — пробуем получить caption из других источников
-    # Источник 1: yt-dlp JSON (независимый от private API)
-    fallback_caption = ""
+    # ── ОДИН вызов yt-dlp вместо трёх! (~3-10с) ──
+    yt_info: dict | None = None
     try:
-        fallback_caption = _ytdlp_extract_caption(clean)
-        if fallback_caption:
-            logger.info("caption from ytdlp: %d chars", len(fallback_caption))
-    except Exception:
-        pass
-    # Источник 2: private API (если yt-dlp не дал caption)
+        yt_info = _ytdlp_extract_info(clean)
+        if yt_info:
+            logger.info("ytdlp info OK (title=%s)", yt_info.get("title"))
+    except Exception as exc:
+        logger.warning("ytdlp extract failed: %s", exc)
+
+    # Caption из кеша yt_info
+    fallback_caption = ""
+    if yt_info:
+        fallback_caption = yt_info.get("description", "") or ""
     if not fallback_caption:
         try:
             fallback_caption = _fetch_caption_only(clean)
-            if fallback_caption:
-                logger.info("caption from private-api: %d chars", len(fallback_caption))
         except Exception:
             pass
 
-    # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
-    try:
-        path = _download_ytdlp_fast(clean)
-        if path:
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return [path], fallback_caption
-    except Exception as exc:
-        logger.warning("ytdlp-fast failed: %s", exc)
+    # ── Путь 2: yt-dlp видео URL (из кеша — 0с!) ──
+    if yt_info:
+        vid_url = _extract_url_from_ytdlp_info(yt_info)
+        if vid_url:
+            try:
+                dest = _dest_path()
+                _download_direct_url(vid_url, dest)
+                if dest.stat().st_size >= 1024:
+                    check_file_size(dest, source_url=clean)
+                    ms = int((time.monotonic() - t0) * 1000)
+                    bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-fast", size=dest.stat().st_size, elapsed_ms=ms, ts=time.time()))
+                    return [dest], fallback_caption
+                dest.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.warning("ytdlp video dl failed: %s", exc)
 
-    # Путь 2.5: yt-dlp — скачивание фото через thumbnail URL (для /p/ фото-постов)
-    try:
-        img_path = _download_ytdlp_image(clean)
-        if img_path:
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-image", size=img_path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return [img_path], fallback_caption
-    except Exception as exc:
-        logger.warning("ytdlp-image failed: %s", exc)
+    # ── Путь 2.5: yt-dlp фото thumbnail (из кеша — 0с!) ──
+    if yt_info:
+        img_url = _extract_image_url_from_ytdlp_info(yt_info)
+        if img_url:
+            try:
+                dest = _dest_path_image()
+                _download_direct_url(img_url, dest)
+                if dest.stat().st_size >= 1024:
+                    check_file_size(dest, source_url=clean)
+                    ms = int((time.monotonic() - t0) * 1000)
+                    bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-image", size=dest.stat().st_size, elapsed_ms=ms, ts=time.time()))
+                    return [dest], fallback_caption
+                dest.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.warning("ytdlp image dl failed: %s", exc)
 
-    # Путь 3: instagrapi — ПЕРЕД yt-dlp fallback (yt-dlp 60с висит на фото-постах)
+    # ── Путь 3: instagrapi carousel ──
     try:
         carousel_paths = _download_instagram_carousel_via_instagrapi(clean)
         if carousel_paths:
@@ -984,9 +1018,8 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("instagrapi carousel failed: %s", exc)
 
-    # Путь 4: instagrapi — одиночные медиа (clip → video → photo)
+    # ── Путь 4: instagrapi single (clip → video → photo) ──
     from instagrapi.exceptions import ClientError
-
     last_exc: Exception | None = None
     for attempt in range(DOWNLOAD_MAX_RETRIES):
         try:
@@ -994,41 +1027,22 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
             ms = int((time.monotonic() - t0) * 1000)
             bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
             return [path], fallback_caption
-        except ValueError:
+        except (ValueError, RuntimeError):
             raise
-        except RuntimeError:
-            raise
-        except ClientError as exc:
+        except (ClientError, Exception) as exc:
             last_exc = exc
             if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
-                logger.warning(
-                    "instagrapi timeout attempt %s/%s: %s",
-                    attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
-                )
                 continue
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=False, method="instagrapi", size=0, elapsed_ms=ms, ts=time.time(), error=str(exc)[:120]))
-            raise _runtime_error_for(exc) from exc
-        except Exception as exc:
-            last_exc = exc
-            if _is_timeout_error(exc) and attempt < DOWNLOAD_MAX_RETRIES - 1:
-                logger.warning(
-                    "instagrapi timeout attempt %s/%s: %s",
-                    attempt + 1, DOWNLOAD_MAX_RETRIES, exc,
-                )
-                continue
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=False, method="instagrapi", size=0, elapsed_ms=ms, ts=time.time(), error=str(exc)[:120]))
             raise _runtime_error_for(exc) from exc
 
-    # Путь 5: yt-dlp полный fallback (медленный — ~60с, последний шанс для видео)
+    # ── Путь 5: yt-dlp полный fallback (последний шанс) ──
     try:
         path = _download_ytdlp_fallback(clean)
         ms = int((time.monotonic() - t0) * 1000)
         bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
         return [path], fallback_caption
-    except Exception as exc:
-        logger.warning("ytdlp-fallback failed: %s", exc)
+    except Exception:
+        pass
 
     if last_exc is not None:
         raise _runtime_error_for(last_exc)
