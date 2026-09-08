@@ -4,6 +4,30 @@
 
 ## 2026-09-08 — Фикс Instagram: карусели, фото, описание
 
+### Обновление (коммит `12c5ae1`) — Устранена главная причина зависания
+
+**Проблема:** предыдущий фикс не помог — yt-dlp вызывался **3 РАЗА** (caption + fast + image), каждый subprocess таймаут 20с = 60с только на yt-dlp, плюс private API и instagrapi → суммарно > 45с таймаута.
+
+**Исправления:**
+1. **ОДИН вызов `_ytdlp_extract_info()` вместо трёх** — результат кешируется и используется для caption, видео URL и фото URL. **Экономия ~40 секунд!**
+2. **Subprocess timeout 20с → 10с** — yt-dlp не может висеть дольше 10с
+3. Убраны старые функции `_download_ytdlp_fast`, `_download_ytdlp_image`, `_ytdlp_extract_caption` из основного флоу (используется общий `yt_info`)
+4. Новые хелперы `_extract_url_from_ytdlp_info` и `_extract_image_url_from_ytdlp_info` — извлекают URL из кеша мгновенно (0с)
+
+### Таймлайн нового флоу (~5-20с вместо ~60-270с):
+
+| Шаг | Время | Что делает |
+|-----|-------|------------|
+| 1. Private API | ~2с | API → video/photo download |
+| 2. **ОДИН yt-dlp** | **~5с** | JSON: caption + url + thumbnail |
+| 3. yt-dlp video URL | **~0с** | из кеша, скачивание ~2с |
+| 4. yt-dlp photo URL | **~0с** | из кеша, скачивание ~2с |
+| 5. instagrapi carousel | ~3с | carousel_media |
+| 6. instagrapi single | ~5с | clip → video → photo |
+| 7. yt-dlp fallback | ~10с | последний шанс |
+
+---
+
 ### Обновление (коммит `03cb535`) — Фото не скачивается, 4 мин ожидания
 
 **Проблема:** видео работают, но фото-посты (`/p/`) не скачиваются — бот "тупит" 4 минуты и выдаёт "Instagram тупит".
