@@ -160,8 +160,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     logger.info("IG clean_url=%s", clean_url)
 
-    MAX_DOWNLOAD_RETRIES = 3
-    RETRY_DELAY_SEC = 5
+    MAX_DOWNLOAD_RETRIES = 2
+    RETRY_DELAY_SEC = 3
     last_error: Exception | None = None
 
     for download_attempt in range(MAX_DOWNLOAD_RETRIES):

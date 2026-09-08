@@ -22,7 +22,7 @@ TELEGRAM_MAX_BYTES = 52_428_800  # 50 MiB
 INSTAGRAM_REQUEST_TIMEOUT = 20
 DOWNLOAD_MAX_RETRIES = 1
 DOWNLOAD_RETRY_DELAY_SEC = 0.2
-DOWNLOAD_TOTAL_TIMEOUT_SEC = 90  # Render free tier — медленная сеть
+DOWNLOAD_TOTAL_TIMEOUT_SEC = 45  # 45с — достаточно для всех путей, не заставляем ждать
 DOWNLOAD_CHUNK_SIZE = 262144  # 256KB — mejor throughput чем 64KB
 
 # --- SOCKS5 proxy (xray local) ---
@@ -453,6 +453,9 @@ def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
 
         if not video_url:
             # ═══ IMAGE (photo / image-only carousel) ═══
+            media_type = media.get("media_type")
+            logger.info("private API: photo path for %s (media_type=%s, has_image_versions2=%s)",
+                        shortcode, media_type, bool(media.get("image_versions2")))
             image_urls: list[str] = []
             # Собираем ВСЕ изображения из карусели
             carousel = media.get("carousel_media", [])
@@ -473,12 +476,17 @@ def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
             dests: list[Path] = []
             for img_url in image_urls:
                 dest = _dest_path_image()
-                with requests.get(img_url, stream=True, timeout=30, headers=headers, proxies=PROXIES) as dl:
-                    dl.raise_for_status()
-                    with open(dest, "wb") as f:
-                        for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                            f.write(chunk)
+                try:
+                    with requests.get(img_url, stream=True, timeout=20, headers=headers, proxies=PROXIES) as dl:
+                        dl.raise_for_status()
+                        with open(dest, "wb") as f:
+                            for chunk in dl.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                                f.write(chunk)
+                except Exception as img_exc:
+                    logger.warning("private API: image download failed for %s: %s", img_url[:80], img_exc)
+                    continue
                 if dest.stat().st_size < 1024:
+                    logger.info("private API: image too small (%d bytes) for %s", dest.stat().st_size, img_url[:80])
                     dest.unlink(missing_ok=True)
                     continue
                 check_file_size(dest, source_url=url)
@@ -560,6 +568,37 @@ def _ytdlp_extract_url(url: str) -> str | None:
     return video_url
 
 
+def _ytdlp_extract_image_url(url: str) -> str | None:
+    """Извлекает URL изображения из yt-dlp metadata для фото-постов."""
+    info = _ytdlp_extract_info(url)
+    if not info:
+        return None
+    # 1. thumbnail — для /p/ это реальное фото поста
+    thumb = info.get("thumbnail")
+    if thumb:
+        return thumb
+    # 2. formats без video codec (image-only)
+    for fmt in info.get("formats", []):
+        if fmt.get("vcodec", "none") == "none" and fmt.get("url"):
+            return fmt["url"]
+    return None
+
+
+def _download_ytdlp_image(url: str) -> Path | None:
+    """Скачивает фото поста через yt-dlp thumbnail URL."""
+    img_url = _ytdlp_extract_image_url(url)
+    if not img_url:
+        return None
+    dest = _dest_path_image()
+    _download_direct_url(img_url, dest)
+    if dest.stat().st_size < 1024:
+        dest.unlink(missing_ok=True)
+        return None
+    check_file_size(dest, source_url=url)
+    logger.info("ytdlp-image OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+    return dest
+
+
 def _ytdlp_extract_caption(url: str) -> str:
     """Извлекает описание/подпись поста через yt-dlp."""
     info = _ytdlp_extract_info(url)
@@ -615,7 +654,7 @@ def _download_ytdlp_fallback(url: str) -> Path:
         cmd,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=20,
     )
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {result.stderr[:200]}")
@@ -924,6 +963,16 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
             return [path], fallback_caption
     except Exception as exc:
         logger.warning("ytdlp-fast failed: %s", exc)
+
+    # Путь 2.5: yt-dlp — скачивание фото через thumbnail URL (для /p/ фото-постов)
+    try:
+        img_path = _download_ytdlp_image(clean)
+        if img_path:
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-image", size=img_path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+            return [img_path], fallback_caption
+    except Exception as exc:
+        logger.warning("ytdlp-image failed: %s", exc)
 
     # Путь 3: instagrapi — ПЕРЕД yt-dlp fallback (yt-dlp 60с висит на фото-постах)
     try:
