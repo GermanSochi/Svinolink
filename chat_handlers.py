@@ -294,7 +294,9 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         if "cookie" in error_text or "сессия" in error_text or "login" in error_text:
             from instagram_download import _notify_admin_cookies_expired
             await _notify_admin_cookies_expired(bot)
-            # Молча выходим — не спамим пользователя
+            # Показываем пользователю понятное сообщение
+            bot_stats.record_error(f"IG session: {clean_url}")
+            await message.answer(map_instagram_error(last_error, clean_url))
             return
         if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
             bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")

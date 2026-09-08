@@ -394,6 +394,7 @@ def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
         "X-IG-App-ID": "936619743392459",
         "Accept": "*/*",
         "Accept-Language": "en-US",
+        "Referer": "https://www.instagram.com/",
     }
 
     # Определяем тип контента: Stories используют numeric ID напрямую
@@ -608,8 +609,12 @@ def _ytdlp_extract_caption(url: str) -> str:
 
 
 def _download_direct_url(direct_url: str, dest: Path) -> None:
-    """Скачивает видео по прямой URL через requests."""
-    with requests.get(direct_url, stream=True, timeout=40, proxies=PROXIES) as resp:
+    """Скачивает видео/фото по прямой URL через requests."""
+    dl_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.instagram.com/",
+    }
+    with requests.get(direct_url, stream=True, timeout=40, headers=dl_headers, proxies=PROXIES) as resp:
         resp.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
@@ -812,6 +817,7 @@ def _download_instagram_carousel_via_instagrapi(clean: str) -> list[Path] | None
         "User-Agent": "Instagram 275.0.0.27.98 Android",
         "X-IG-App-ID": "936619743392459",
         "Accept": "*/*",
+        "Referer": "https://www.instagram.com/",
     }
 
     paths: list[Path] = []
@@ -946,6 +952,8 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     if not is_instagram_media_url(clean):
         raise ValueError("нужна ссылка Instagram: /reel/, /p/, /stories/ или /s/")
 
+    logger.info("download_instagram_video START %s (has_p=%s)", clean, "/p/" in clean)
+
     # ── Путь 1: Instagram private API (~0.5-2с) ──
     try:
         result = _download_via_private_api(clean)
@@ -996,6 +1004,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     if yt_info:
         img_url = _extract_image_url_from_ytdlp_info(yt_info)
         if img_url:
+            logger.info("ytdlp image URL found: %s", img_url[:120])
             try:
                 dest = _dest_path_image()
                 _download_direct_url(img_url, dest)
@@ -1004,6 +1013,7 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
                     ms = int((time.monotonic() - t0) * 1000)
                     bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-image", size=dest.stat().st_size, elapsed_ms=ms, ts=time.time()))
                     return [dest], fallback_caption
+                logger.info("ytdlp image too small: %d bytes", dest.stat().st_size)
                 dest.unlink(missing_ok=True)
             except Exception as exc:
                 logger.warning("ytdlp image dl failed: %s", exc)
