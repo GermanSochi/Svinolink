@@ -69,6 +69,14 @@ def map_instagram_error(exc: Exception, instagram_url: str | None = None) -> str
         if instagram_url:
             return f"{body}\n\n🔗 {instagram_url}"
         return f"{body}\n\n🎞️ Открой в приложении."
+    if "не удалось скачать фото" in text:
+        body = (
+            "🐷 Instagram **блокирует** загрузку фото с сервера.\n\n"
+            "⏳ Попробуй ещё раз через минуту — иногда помогает."
+        )
+        if instagram_url:
+            return f"{body}\n\n🔗 {instagram_url}"
+        return body
     if "❌" in str(exc) and len(str(exc)) < 200:
         return instagram_error_message(instagram_url)
     return instagram_error_message(instagram_url)

@@ -999,8 +999,27 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
         except Exception as exc:
             logger.warning("page photo failed for /p/ URL: %s", exc)
 
-        # oEmbed + embed + page не справились — сразу ошибку
-        raise RuntimeError("Не удалось скачать фото с Instagram (oEmbed + embed + page не дали результат)")
+        # embed/page не справились — пробуем yt-dlp (может извлечь фото через proxy)
+        logger.info("photo methods failed for %s, trying yt-dlp fallback...", clean)
+        try:
+            path = await _download_ytdlp_fast(clean)
+            if path:
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-photo", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+                return [path], ""
+        except Exception as exc:
+            logger.warning("ytdlp-photo fast failed: %s", exc)
+
+        try:
+            path = await _download_ytdlp_fallback(clean)
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-photo-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+            return [path], ""
+        except Exception as exc:
+            logger.warning("ytdlp-photo fallback failed: %s", exc)
+
+        # Все фото-методы исчерпаны
+        raise RuntimeError("Не удалось скачать фото с Instagram (private-api + embed + page + yt-dlp не дали результат)")
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
