@@ -372,6 +372,20 @@ def _shortcode_to_media_id(shortcode: str) -> int:
     return result
 
 
+def _strip_cdn_params(url: str) -> str:
+    """Убирает query-параметры из CDN URL Instagram для получения полного размера.
+
+    Instagram CDN (scontent.cdninstagram.com, cdninstagram.com, fbcdn.net)
+    ограничивает размер через параметры вроде _nc_cat, _nc_ohc, oh, oe и т.д.
+    Без параметров CDN отдаёт полноразмерное изображение.
+    """
+    from urllib.parse import urlparse
+    if "cdninstagram.com" in url or "fbcdn.net" in url:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    return url
+
+
 def _extract_shortcode(url: str) -> str | None:
     """Извлекает shortcode/media_id из URL.
 
@@ -757,13 +771,6 @@ async def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
-def _extract_shortcode(url: str) -> str | None:
-    """Извлекает shortcode из Instagram URL."""
-    import re
-    m = re.search(r"/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", url)
-    return m.group(1) if m else None
-
-
 async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
     """
     Fallback для фото-постов: парсит embed-страницу Instagram.
@@ -815,7 +822,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                             thumbnail = oe_data.get("thumbnail_url", "")
                             logger.info("oEmbed response: thumbnail_url=%s", thumbnail[:80] if thumbnail else "EMPTY")
                             if thumbnail and thumbnail.startswith("http"):
-                                image_url = thumbnail
+                                image_url = _strip_cdn_params(thumbnail)
                                 logger.info("oEmbed thumbnail_url found: %s...", thumbnail[:80])
             except Exception as oe_exc:
                 logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
@@ -829,7 +836,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
             if og_img:
                 og_val = og_img.get("content", "").strip()
                 if og_val and og_val.startswith("http"):
-                    image_url = og_val
+                    image_url = _strip_cdn_params(og_val)
                     logger.info("embed og:image found: %s...", og_val[:80])
 
             # Strategy B: largest <img> in embed (not tiny avatars)
@@ -844,7 +851,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                         continue
                     # cdninstagram images are the actual post content
                     if "cdninstagram" in src or "fbcdn" in src:
-                        image_url = src
+                        image_url = _strip_cdn_params(src)
                         logger.info("embed <img> cdninstagram found: %s...", src[:80])
                         break
 
@@ -907,6 +914,8 @@ async def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
             best_url = max(matches, key=len)
             # Декодируем unicode escapes
             best_url = best_url.replace("\\u0026", "&")
+            # Убираем query-параметры CDN для полного размера
+            best_url = _strip_cdn_params(best_url)
             logger.info("page: found cdninstagram image URL: %s...", best_url[:80])
 
             dest = _dest_path_image()
@@ -936,10 +945,6 @@ def _is_likely_photo_url(url: str) -> bool:
     Быстрая эвристика: /p/ ссылки ЧАЩЕ фото, /reel/ — видео.
     Не идеально, но позволяет пропустить yt-dlp для явных фото-ссылок.
     """
-    return "/p/" in url and "/reel/" not in url
-
-
-def _is_likely_photo_url(url: str) -> bool:
     return "/p/" in url and "/reel/" not in url
 
 
