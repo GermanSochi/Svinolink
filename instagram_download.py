@@ -743,6 +743,7 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         return None
 
     embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
+    logger.info("embed: starting photo download for %s, proxy=%s", shortcode, PROXIES)
     try:
         image_url: str | None = None
         embed_html: str | None = None
@@ -859,6 +860,69 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         return None
 
 
+def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
+    """
+    Fallback для фото: парсит JSON из HTML-страницы поста Instagram.
+    Работает без авторизации, но может быть нестабильным.
+    """
+    shortcode = _extract_shortcode(url)
+    if not shortcode:
+        return None
+
+    page_url = f"https://www.instagram.com/p/{shortcode}/"
+    try:
+        logger.info("page: fetching %s for photo extraction", page_url)
+        resp = requests.get(
+            page_url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            proxies=PROXIES,
+        )
+        logger.info("page status=%s for %s, len=%s", resp.status_code, shortcode, len(resp.text))
+        if resp.status_code != 200:
+            return None
+
+        # Ищем image URL в JSON данных страницы
+        import re
+        html = resp.text
+
+        # Ищем cdninstagram/fbcdn URL для изображений
+        img_pattern = re.compile(r'https?://[^\s"\'\\]+(?:cdninstagram|fbcdn)\.net[^\s"\'\\]+\.jpg[^\s"\'\\]*')
+        matches = img_pattern.findall(html)
+        if matches:
+            # Берём самый длинный URL (обычно самый полный)
+            best_url = max(matches, key=len)
+            # Декодируем unicode escapes
+            best_url = best_url.replace("\\u0026", "&")
+            logger.info("page: found cdninstagram image URL: %s...", best_url[:80])
+
+            dest = _dest_path_image()
+            img_resp = requests.get(
+                best_url,
+                stream=True,
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"},
+                proxies=PROXIES,
+            )
+            logger.info("page image download status=%s", img_resp.status_code)
+            img_resp.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in img_resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                    f.write(chunk)
+            if dest.stat().st_size < 1024:
+                dest.unlink(missing_ok=True)
+                return None
+            logger.info("page photo OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+            return [dest], ""
+
+        logger.warning("page: no cdninstagram image found in HTML for %s", shortcode)
+        return None
+
+    except Exception as exc:
+        logger.warning("page photo error for %s: %s", url, exc, exc_info=True)
+        return None
+
+
 def _is_likely_photo_url(url: str) -> bool:
     """
     Быстрая эвристика: /p/ ссылки ЧАЩЕ фото, /reel/ — видео.
@@ -935,9 +999,20 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
                 return paths, caption
         except Exception as exc:
             logger.warning("embed photo failed for /p/ URL: %s", exc)
-        # oEmbed + embed не справились — НЕ идём в yt-dlp (он не качает фото),
-        # сразу поднимаем ошибку, чтобы handler мог ретраить или показать ошибку
-        raise RuntimeError("Не удалось скачать фото с Instagram (oEmbed + embed не дали результат)")
+
+        # Fallback: прямой парсинг HTML-страницы поста
+        try:
+            result = _download_photo_via_page(clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="page-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            logger.warning("page photo failed for /p/ URL: %s", exc)
+
+        # oEmbed + embed + page не справились — сразу ошибку
+        raise RuntimeError("Не удалось скачать фото с Instagram (oEmbed + embed + page не дали результат)")
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
