@@ -14,6 +14,25 @@ import ai_quota
 from config import settings
 from deps import gpt, store
 from chat_examples import chat_examples_markdown
+
+# ── Рандомные подписи к видео/фото (1-2 слова) ──
+_IG_PHRASES = (
+    "❤️ Спасибо",
+    "🐷 Круто",
+    "🔥 Лайк",
+    "💪 Топ",
+    "🎯 Огонь",
+    "🐷 Зацените",
+    "✨ Респект",
+    "🤙 Уважуха",
+    "💎 Шедевр",
+    "🎬 Кино",
+    "😎 База",
+    "🐷 Ням",
+    "🚀 Вау",
+    "👀 Глянь",
+    "🐷 Хрю",
+)
 from chat_user_log import user_messages_markdown
 from telegram_format import reply_formatted, reply_photo_then_text
 from chat_queries import is_chat_examples_request
@@ -255,6 +274,18 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                     )
                 except Exception as btn_err:
                     logger.warning("caption button failed (non-fatal): %s", btn_err)
+
+            # ── Рандомная подпись-донат (всегда нефатально) ──
+            if sent_ok:
+                try:
+                    import random as _rnd
+                    phrase = _rnd.choice(_IG_PHRASES)
+                    await message.answer(
+                        f"{phrase}\nhttps://clck.ru/3UaRGo",
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception as donate_err:
+                    logger.warning("donate message failed (non-fatal): %s", donate_err)
 
             # Успех — выходим
             last_error = None

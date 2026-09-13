@@ -533,7 +533,7 @@ def _ytdlp_extract_url(url: str) -> str | None:
             cmd,
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=15,
         )
         if result.returncode != 0:
             logger.info("yt-dlp extract failed: %s", result.stderr[:200])
@@ -544,10 +544,18 @@ def _ytdlp_extract_url(url: str) -> str | None:
         if not video_url:
             formats = info.get("formats", [])
             if formats:
-                # Берём лучший MP4-формат
-                mp4s = [f for f in formats if f.get("vcodec", "none") != "none"]
+                # Берём формат с видео И аудио (DASH-потоки без звука — пропускаем)
+                mp4s = [
+                    f for f in formats
+                    if f.get("vcodec", "none") != "none"
+                    and f.get("acodec", "none") != "none"
+                ]
                 if mp4s:
                     video_url = mp4s[-1].get("url")
+                else:
+                    # Нет формата с аудио → fallback через _download_ytdlp_fallback
+                    # (корректно мержит video+audio через ffmpeg)
+                    return None
         return video_url
     except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
         logger.info("yt-dlp extract error: %s", exc)
@@ -587,7 +595,8 @@ def _download_ytdlp_fallback(url: str) -> Path:
         "--no-check-certificates",
         "--no-playlist",
         "--no-cache-dir",
-        "-f", "best[ext=mp4]/best",
+        "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+        "--merge-output-format", "mp4",
         "-o", str(dest),
         url,
     ]
@@ -601,7 +610,7 @@ def _download_ytdlp_fallback(url: str) -> Path:
         cmd,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=45,
     )
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {result.stderr[:200]}")
@@ -716,6 +725,92 @@ def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
+def _extract_shortcode(url: str) -> str | None:
+    """Извлекает shortcode из Instagram URL."""
+    import re
+    m = re.search(r"/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", url)
+    return m.group(1) if m else None
+
+
+def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
+    """
+    Fallback для фото-постов: парсит embed-страницу Instagram.
+    Работает без авторизации (~2-4с).
+    Возвращает ([path, ...], caption) или None.
+    """
+    shortcode = _extract_shortcode(url)
+    if not shortcode:
+        return None
+
+    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
+    try:
+        from bs4 import BeautifulSoup
+
+        resp = requests.get(
+            embed_url,
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            proxies=PROXIES,
+        )
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Ищем изображения в embed — основное фото поста
+        img_tags = soup.find_all("img")
+        image_urls: list[str] = []
+        for img in img_tags:
+            src = img.get("src", "")
+            # Фильтруем: только CDN Instagram, пропускаем иконки/аватары
+            if ("cdninstagram" in src or "fbcdn" in src) and "150x150" not in src and "s150x150" not in src:
+                if src not in image_urls:
+                    image_urls.append(src)
+
+        if not image_urls:
+            logger.info("embed: no images found for %s", shortcode)
+            return None
+
+        # Скачиваем первое (основное) изображение
+        dest = _dest_path_image()
+        img_resp = requests.get(
+            image_urls[0],
+            stream=True,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+            proxies=PROXIES,
+        )
+        img_resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in img_resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                f.write(chunk)
+
+        if dest.stat().st_size < 1024:
+            dest.unlink(missing_ok=True)
+            return None
+
+        check_file_size(dest, source_url=url)
+
+        # Пытаемся достать caption из embed
+        caption = ""
+        meta_desc = soup.find("meta", attrs={"property": "og:description"})
+        if meta_desc:
+            caption = meta_desc.get("content", "").strip()
+
+        logger.info("embed photo OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+        return [dest], caption
+
+    except Exception as exc:
+        logger.info("embed photo fallback failed for %s: %s", shortcode, exc)
+        return None
+
+
+def _is_likely_photo_url(url: str) -> bool:
+    """
+    Быстрая эвристика: /p/ ссылки ЧАЩЕ фото, /reel/ — видео.
+    Не идеально, но позволяет пропустить yt-dlp для явных фото-ссылок.
+    """
+    return "/p/" in url and "/reel/" not in url
+
+
 def download_instagram_video(url: str) -> tuple[list[Path], str]:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
@@ -743,6 +838,20 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
             return paths, caption
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
+
+    # Путь 1.5: Photo embed fallback для /p/ ссылок (без авторизации, ~2-4с)
+    if _is_likely_photo_url(clean):
+        try:
+            result = _download_photo_via_embed(clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            logger.warning("embed photo failed: %s", exc)
+        # Для фото НЕ пробуем yt-dlp — он не умеет скачивать фото
+        raise RuntimeError("❌ Не удалось скачать фото с Instagram")
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
