@@ -671,6 +671,51 @@ async def _download_ytdlp_fallback(url: str) -> Path:
     return dest
 
 
+async def _ytdlp_download_thumbnail(url: str) -> Path | None:
+    """Скачивает thumbnail/фото из поста через yt-dlp (--write-thumbnail).
+
+    Для фото-постов Instagram yt-dlp может извлечь thumbnail.
+    Работает через proxy если настроен.
+    """
+    dest = _dest_path_image()
+    cmd = [
+        "yt-dlp",
+        "--no-warnings",
+        "--no-check-certificates",
+        "--no-playlist",
+        "--no-cache-dir",
+        "--write-thumbnail",
+        "--skip-download",
+        "--convert-thumbnails", "jpg",
+        "-o", str(dest.with_suffix(".%(ext)s")),
+        url,
+    ]
+    if PROXY_ENABLED:
+        cmd.extend(["--proxy", PROXY_URL])
+    cookies_path = _cookies_file()
+    if cookies_path.is_file():
+        cmd.insert(1, "--cookies")
+        cmd.insert(2, str(cookies_path))
+    logger.info("ytdlp-thumb: running for %s", url)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    stderr_text = stderr.decode(errors="ignore")
+    if proc.returncode != 0:
+        raise RuntimeError(f"yt-dlp thumb failed: {stderr_text[:200]}")
+    # Найти скачанный файл (yt-dlp может добавить расширение)
+    candidates = list(dest.parent.glob(f"{dest.stem}*"))
+    if not candidates:
+        raise RuntimeError("yt-dlp thumb: файл не создан")
+    result = candidates[0]
+    if result.stat().st_size < 1024:
+        result.unlink(missing_ok=True)
+        return None
+    check_file_size(result, source_url=url)
+    logger.info("ytdlp-thumb OK %s -> %s (%s bytes)", url, result, result.stat().st_size)
+    return result
+
+
 def _is_timeout_error(exc: Exception) -> bool:
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return True
@@ -977,6 +1022,7 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
         logger.warning("private-api failed: %s", exc)
 
     # Путь 1.5: Для /p/ ссылок — oEmbed фото (без yt-dlp, быстрее и надёжнее)
+    photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
         try:
             result = await _download_photo_via_embed(clean)
@@ -985,7 +1031,10 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
                 ms = int((time.monotonic() - t0) * 1000)
                 bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
                 return paths, caption
+            else:
+                photo_errors.append("embed→None")
         except Exception as exc:
+            photo_errors.append(f"embed→{exc}")
             logger.warning("embed photo failed for /p/ URL: %s", exc)
 
         # Fallback: прямой парсинг HTML-страницы поста
@@ -996,30 +1045,27 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
                 ms = int((time.monotonic() - t0) * 1000)
                 bot_stats.record_download(DownloadStat(url=clean, ok=True, method="page-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
                 return paths, caption
+            else:
+                photo_errors.append("page→None")
         except Exception as exc:
+            photo_errors.append(f"page→{exc}")
             logger.warning("page photo failed for /p/ URL: %s", exc)
 
-        # embed/page не справились — пробуем yt-dlp (может извлечь фото через proxy)
-        logger.info("photo methods failed for %s, trying yt-dlp fallback...", clean)
+        # embed/page не справились — пробуем yt-dlp thumbnail (для фото-постов)
+        logger.info("photo methods failed for %s (%s), trying yt-dlp...", clean, "; ".join(photo_errors))
         try:
-            path = await _download_ytdlp_fast(clean)
+            path = await _ytdlp_download_thumbnail(clean)
             if path:
                 ms = int((time.monotonic() - t0) * 1000)
-                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-photo", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-thumb", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
                 return [path], ""
         except Exception as exc:
-            logger.warning("ytdlp-photo fast failed: %s", exc)
-
-        try:
-            path = await _download_ytdlp_fallback(clean)
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-photo-full", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
-            return [path], ""
-        except Exception as exc:
-            logger.warning("ytdlp-photo fallback failed: %s", exc)
+            photo_errors.append(f"ytdlp-thumb→{exc}")
+            logger.warning("ytdlp-photo failed: %s", exc)
 
         # Все фото-методы исчерпаны
-        raise RuntimeError("Не удалось скачать фото с Instagram (private-api + embed + page + yt-dlp не дали результат)")
+        logger.error("ALL photo methods failed for %s: %s", clean, "; ".join(photo_errors))
+        raise RuntimeError(f"Не удалось скачать фото с Instagram ({'; '.join(photo_errors)})")
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
