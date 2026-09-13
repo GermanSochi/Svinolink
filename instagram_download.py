@@ -877,22 +877,18 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Путь 1.5: Для /p/ ссылок — определяем тип контента через embed
+    # Путь 1.5: Для /p/ ссылок — oEmbed фото (без yt-dlp, быстрее и надёжнее)
     if _is_likely_photo_url(clean):
-        content_type = _embed_is_video(clean)
-        if content_type is False:
-            # Явно фото → пробуем embed photo download
-            try:
-                result = _download_photo_via_embed(clean)
-                if result:
-                    paths, caption = result
-                    ms = int((time.monotonic() - t0) * 1000)
-                    bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
-                    return paths, caption
-            except Exception as exc:
-                logger.warning("embed photo failed: %s", exc)
-            raise RuntimeError("❌ Не удалось скачать фото с Instagram")
-        # content_type is True (video) or None (uncertain) → идём в yt-dlp ниже
+        try:
+            result = _download_photo_via_embed(clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            logger.warning("embed photo failed for /p/ URL: %s", exc)
+        # embed не справился — пробуем yt-dlp ниже (может это видео в /p/)
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
