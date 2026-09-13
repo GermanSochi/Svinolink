@@ -582,7 +582,7 @@ async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
         logger.info("watch_feed: downloading %s", sc)
         async with _download_semaphore:
             file_paths, _ = await asyncio.wait_for(
-                asyncio.to_thread(download_instagram_video, link),
+                download_instagram_video(link),
                 timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
             )
 

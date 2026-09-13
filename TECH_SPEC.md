@@ -1,3 +1,89 @@
+# Svinolink Instagram Pipeline — Full Spec & Audit
+
+> **For:** AI Agent doing code review, debugging, or feature work.
+> **Generated:** 2026-09-13 14:21 | **Status:** Production (async-refactored, 0 `requests` refs)
+
+---
+
+## 1. Architecture
+
+```
+User sends IG URL → chat_handlers.py → instagram_download.py → send photo/video/carousel
+```
+
+### yt-dlp: ANSWER
+**yt-dlp = LOCAL CLI BINARY via `asyncio.create_subprocess_exec`, NOT Python library.**
+- `requirements.txt`: `yt-dlp>=2025.0.0`
+- Two modes: Fast (`yt-dlp -g` → direct URL → aiohttp) / Fallback (`yt-dlp -o file`)
+- **Never uses** `yt_dlp.YoutubeDL()` Python API
+
+### Download Priority
+
+| # | Path | For | Method | Speed |
+|---|------|-----|--------|-------|
+| 1 | Private API | `/reel/` `/p/` `/tv/` | instagrapi + aiohttp CDN | ~1-2s |
+| 1.5 | oEmbed Photo | `/p/` only | `api.instagram.com/oembed/` | ~1s |
+| 2 | yt-dlp Fast | any URL | `yt-dlp -g` → aiohttp | ~1-3s |
+| 3 | yt-dlp Fallback | any URL | `yt-dlp -o file` | ~3-8s |
+| 3.5 | Embed Photo | `/p/` only | parse `/embed/` HTML | ~2s |
+| 4 | Page Photo | `/p/` only | parse page HTML | ~2s |
+| 5 | instagrapi | any URL | sync library (last resort) | ~3-10s |
+
+### HTTP Stack
+
+| Component | Library | Blocking? |
+|-----------|---------|-----------|
+| All HTTP | `aiohttp` + `aiohttp_socks` | ❌ async |
+| yt-dlp CLI | `asyncio.create_subprocess_exec` | ❌ async |
+| instagrapi | `asyncio.to_thread()` | ⚠️ sync in thread |
+
+### UA Rotation & Proxy
+- 10 browser UAs → `_random_ua()` per session
+- `PROXY_ENABLED=1` + `PROXY_URL` → `aiohttp_socks.ProxyConnector`
+
+---
+
+## 2. Audit — Issues & Improvements
+
+### 🔴 Critical (FIXED 2026-09-13)
+
+1. **✅ FIXED: Missing `await` on `_download_photo_via_embed`** — fallback path 3.5 called `async def` without `await`. Fixed: added `await`.
+
+2. **✅ FIXED: Private API image download missing `cookies=cookies`** — CDN image download used `headers=headers` only. For private/protected posts, Instagram CDN returns empty/403 without auth. Fixed: added `cookies=cookies`.
+
+3. **❌ FALSE ALARM: oEmbed indentation** — analysis claimed data read after `async with` close. Actually the data extraction IS correctly inside the `async with` block (24-space indent). No fix needed.
+
+### 🟡 Medium
+
+4. **instagrapi thread pool exhaustion** — no limit on concurrent `to_thread()` calls.
+5. **`bot_stats.record_download()` called directly** (not via `to_thread`) in some paths — blocks if I/O.
+6. **Session-per-request** — `_aiohttp_session()` creates+destroys per call. Consider shared session.
+
+### 🟢 Low
+
+7. **Hardcoded chunk size** (256KB) — could be 1MB for fast connections.
+8. **`os.remove()` sync** — consider `Path.unlink()` in executor.
+9. **Semaphore bypass** — oEmbed JSON fetch shouldn't need download semaphore.
+
+---
+
+## 3. Environment Variables
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `PROXY_ENABLED` | `""` | `"1"` to activate proxy |
+| `PROXY_URL` | `socks5h://127.0.0.1:10808` | Proxy address |
+| `IG_COOKIES` | `""` | Netscape cookie string |
+| `INSTAGRAM_COOKIES_JSON` | `""` | JSON cookies |
+| `INSTAGRAM_ACCOUNT_ID` | `""` | instagrapi username |
+| `INSTAGRAM_ACCOUNT_PASSWORD` | `""` | instagrapi password |
+| `INSTAGRAM_PAUSED` | `""` | `"1"` to disable IG |
+
+---
+
+## 4. Full Source: instagram_download.py
+
+```python
 from __future__ import annotations
 
 import asyncio
@@ -509,7 +595,7 @@ async def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
             for img_url in image_urls:
                 dest = _dest_path_image()
                 async with _aiohttp_session() as _s:
-                    async with _s.get(img_url, headers=headers, cookies=cookies) as dl:
+                    async with _s.get(img_url, headers=headers) as dl:
                         dl.raise_for_status()
                         with open(dest, "wb") as f:
                             async for chunk in dl.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
@@ -1018,7 +1104,7 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
 
     # Путь 3.5: Embed photo fallback (если все yt-dlp не справились — возможно фото)
     try:
-        result = await _download_photo_via_embed(clean)
+        result = _download_photo_via_embed(clean)
         if result:
             paths, caption = result
             ms = int((time.monotonic() - t0) * 1000)
@@ -1085,3 +1171,722 @@ def remove_files(paths: list[Path] | None) -> None:
         return
     for p in paths:
         remove_file(p)
+
+```
+
+---
+
+## 5. Full Source: chat_handlers.py
+
+```python
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import io
+
+from aiogram import Bot, F, Router
+from aiogram.filters import BaseFilter, StateFilter
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
+
+import ai_quota
+from config import settings
+from deps import gpt, store
+from chat_examples import chat_examples_markdown
+
+# ── Рандомные подписи к видео/фото ──
+# Два слова по отдельности, чаще без слова — это юмор бота
+_IG_PHRASES = (None, None, None, None, "Донаты", "Приветствуются")
+from chat_user_log import user_messages_markdown
+from telegram_format import reply_formatted, reply_photo_then_text
+from chat_queries import is_chat_examples_request
+from capabilities import capabilities_markdown, is_capabilities_question
+# Мемы/видосы отключены — оставляем импорты закомментированными на будущее.
+from trigger_manage_requests import TriggerAdd, TriggerDelete, TriggerUpdate, parse_trigger_manage
+from doc_extract import extract_docx_text, extract_pdf_text, extract_xlsx_preview, extract_plain_text
+from chat_queries import is_who_in_chat_question
+from memory_handlers import RECAP_PATTERN, svin_prompt_with_memory, who_in_chat_reply
+from bot_messages import (
+    instagram_timeout_message,
+    map_instagram_error,
+    video_too_heavy_message,
+    yandex_error_message,
+)
+from personality_commands import try_personality_or_roster
+from web_search_handlers import try_web_search_reply
+from message_urls import message_has_instagram_link, url_from_message
+from trigger_queries import is_trigger_list_question
+from yandex_router import route_intent
+from games import execute_game_action
+from games.responses import render_game_response
+
+logger = logging.getLogger(__name__)
+router = Router(name="chat_handlers")
+
+_SECRET_REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"), "sk-***"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"), "ghp_***"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{10,}\b"), "hf_***"),
+    (re.compile(r"\bvcp_[A-Za-z0-9]{10,}\b"), "vcp_***"),
+    (re.compile(r"\b(xox[baprs]-[A-Za-z0-9-]{10,})\b"), "xox***"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    out = text
+    for pat, repl in _SECRET_REDACTIONS:
+        out = pat.sub(repl, out)
+    return out
+
+TELEGRAM_MAX_BYTES = 52_428_800
+
+_bot_id: int | None = None
+
+
+class SvinInvokeFilter(BaseFilter):
+    """Срабатывает на «свин» в тексте или reply на сообщение бота (только при AI)."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        global _bot_id
+        text = message.text or message.caption
+        if not text:
+            return False
+        if re.search(r"(?i)(свин|свинья)", text):
+            return True
+        # Reply на бота ловим ТОЛЬКО когда AI включён
+        if not settings.ai_enabled:
+            return False
+        replied = message.reply_to_message
+        if not replied or not replied.from_user or not replied.from_user.is_bot:
+            return False
+        if _bot_id is None:
+            me = await bot.get_me()
+            _bot_id = me.id
+        return replied.from_user.id == _bot_id
+
+
+SVIN_AI_FILTER = (
+    StateFilter(None),
+    F.text,
+    ~F.text.startswith("/"),
+    F.chat.type.in_({"group", "supergroup"}),
+    ~F.text.regexp(r"(?i)instagram\.com"),
+    ~F.text.regexp(RECAP_PATTERN),
+    SvinInvokeFilter(),
+)
+
+SVIN_CAPTION_FILTER = (
+    StateFilter(None),
+    F.caption,
+    F.chat.type.in_({"group", "supergroup"}),
+    ~F.caption.regexp(r"(?i)instagram\.com"),
+    SvinInvokeFilter(),
+)
+
+
+class InstagramAnyFilter(BaseFilter):
+    """Любое сообщение с instagram.com в тексте, подписи или entity."""
+
+    async def __call__(self, message: Message) -> bool:
+        blob = (message.text or "") + " " + (message.caption or "")
+        if "instagram.com" in blob.lower():
+            return True
+        return message_has_instagram_link(message)
+
+
+IG_LINK_FILTER = InstagramAnyFilter()
+
+
+from admin_auth import is_admin_user  # noqa: F401 — re-export для старых импортов
+
+
+_ig_caption_cache: dict[str, str] = {}
+
+
+async def handle_instagram_link(message: Message, bot: Bot) -> None:
+    from config import settings
+    from instagram_download import instagram_user_message
+    from bot_stats import bot_stats
+    bot_stats.record_message()
+
+    if not settings.instagram_is_active():
+        await message.answer(instagram_user_message())
+        return
+
+    clean_url: str | None = None
+    text = message.text or message.caption or ""
+    logger.info(
+        "instagram_handler chat=%s type=%s text=%r",
+        message.chat.id,
+        message.chat.type,
+        text[:200],
+    )
+
+    store.register_chat(
+        message.chat.id,
+        title=message.chat.title,
+        chat_type=message.chat.type,
+    )
+
+    from instagram_download import DOWNLOAD_TOTAL_TIMEOUT_SEC, download_instagram_video, remove_files, is_photo_file
+    from instagram_urls import is_instagram_media_url
+
+    clean_url = url_from_message(message)
+    if not clean_url:
+        await message.answer("🐷 Не вытащил ссылку из сообщения.")
+        return
+    if not is_instagram_media_url(clean_url):
+        await message.answer(
+            "🐷 Нужна ссылка на Reel, пост, сторис или актуальное (/reel/, /p/, /stories/, /s/)"
+        )
+        return
+
+    logger.info("IG clean_url=%s", clean_url)
+
+    MAX_DOWNLOAD_RETRIES = 3
+    RETRY_DELAY_SEC = 5
+    last_error: Exception | None = None
+
+    for download_attempt in range(MAX_DOWNLOAD_RETRIES):
+        file_paths: list | None = None
+        try:
+            from instagram_download import _download_semaphore
+            async with _download_semaphore:
+                file_paths, caption = await asyncio.wait_for(
+                    download_instagram_video(clean_url),
+                    timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+                )
+
+            total_size = sum(os.path.getsize(p) for p in file_paths)
+            if total_size > TELEGRAM_MAX_BYTES:
+                remove_files(file_paths)
+                file_paths = None
+                await message.answer(video_too_heavy_message(clean_url))
+                return
+
+            sent_ok = False  # флаг: успешно ли отправлен контент
+
+            # ── Carousel: несколько фото → send_media_group ──
+            if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+                # Генерируем рандомную фразу-донат для подписи
+                import random as _rnd
+                _donate_phrase = _rnd.choice(_IG_PHRASES)
+                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
+                media = []
+                for i, p in enumerate(file_paths[:10]):  # Telegram max 10
+                    kw: dict = {"media": FSInputFile(p)}
+                    if i == 0:
+                        kw["caption"] = _donate_caption
+                    media.append(InputMediaPhoto(**kw))
+                for attempt in range(2):
+                    try:
+                        await message.answer_media_group(
+                            media=media,
+                            reply_to_message_id=message.message_id,
+                        )
+                        sent_ok = True
+                        break
+                    except Exception as e:
+                        if "timeout" in str(e).lower() and attempt < 1:
+                            logger.warning("tg media group timeout attempt %s/2: %s", attempt + 1, e)
+                            await asyncio.sleep(2)
+                            continue
+                        raise
+
+            # ── Single file: видео или одно фото ──
+            else:
+                file_path = file_paths[0]
+                photo = is_photo_file(file_path)
+                # Генерируем рандомную фразу-донат для подписи
+                import random as _rnd
+                _donate_phrase = _rnd.choice(_IG_PHRASES)
+                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
+                for attempt in range(2):
+                    try:
+                        if photo:
+                            await message.answer_photo(
+                                photo=FSInputFile(file_path),
+                                caption=_donate_caption,
+                                reply_to_message_id=message.message_id,
+                            )
+                        else:
+                            await message.answer_video(
+                                video=FSInputFile(file_path),
+                                caption=_donate_caption,
+                                reply_to_message_id=message.message_id,
+                                supports_streaming=True,
+                            )
+                        sent_ok = True
+                        break
+                    except Exception as e:
+                        if "timeout" in str(e).lower() and attempt < 1:
+                            logger.warning(
+                                "telegram upload timeout attempt %s/2: %s",
+                                attempt + 1,
+                                e,
+                            )
+                            await asyncio.sleep(2)
+                            continue
+                        raise
+
+            # ── Кнопка «Описание» — отдельным сообщением (всегда нефатально) ──
+            if sent_ok and caption.strip():
+                try:
+                    cache_key = f"{message.chat.id}:{message.message_id}:{clean_url}"
+                    _ig_caption_cache[cache_key] = caption
+                    if len(_ig_caption_cache) > 100:
+                        old_keys = list(_ig_caption_cache.keys())[:50]
+                        for k in old_keys:
+                            _ig_caption_cache.pop(k, None)
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📝 Описание", callback_data=f"igtxt:{cache_key}")]
+                    ])
+                    await message.answer(
+                        "📝 Описание поста:",
+                        reply_markup=kb,
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception as btn_err:
+                    logger.warning("caption button failed (non-fatal): %s", btn_err)
+
+            # Успех — выходим
+            last_error = None
+            break
+
+        except asyncio.TimeoutError:
+            logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
+            last_error = RuntimeError("timeout")
+            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
+                logger.info("retry %s/%s after %ss", download_attempt + 2, MAX_DOWNLOAD_RETRIES, RETRY_DELAY_SEC)
+                await asyncio.sleep(RETRY_DELAY_SEC)
+                continue
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "instagram download attempt %s/%s failed: %s",
+                download_attempt + 1,
+                MAX_DOWNLOAD_RETRIES,
+                e,
+            )
+            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY_SEC)
+                continue
+        finally:
+            if file_paths is not None:
+                try:
+                    remove_files(file_paths)
+                except Exception:
+                    pass
+
+    # Все попытки исчерпаны
+    if last_error is not None:
+        error_text = str(last_error).lower()
+        # Уведомляем админа при протухании cookies
+        if "cookie" in error_text or "сессия" in error_text or "login" in error_text:
+            from instagram_download import _notify_admin_cookies_expired
+            await _notify_admin_cookies_expired(bot)
+            # Молча выходим — не спамим пользователя
+            return
+        if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
+            bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")
+            await message.answer(instagram_timeout_message())
+        else:
+            bot_stats.record_error(f"IG error: {str(last_error)[:100]}")
+            await message.answer(map_instagram_error(last_error, clean_url))
+
+
+async def handle_ig_text_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    if not data.startswith("igtxt:"):
+        return
+    cache_key = data[6:]
+    caption = _ig_caption_cache.pop(cache_key, "")
+    if not caption:
+        await callback.answer("Текст не найден (кэш истёк)", show_alert=True)
+        return
+    await callback.answer()
+    # Отправляем текст отдельным сообщением
+    await callback.message.answer(caption)
+
+
+async def handle_svin_ai(message: Message, bot: Bot) -> None:
+    try:
+        text = message.text or message.caption
+        if not message.from_user or not text:
+            return
+
+        uid = message.from_user.id
+        logger.info(
+            "svin_ai chat=%s user=%s text=%r",
+            message.chat.id,
+            uid,
+            text[:200],
+        )
+
+        # AI выключен — молча игнорируем все сообщения с тегом
+        if not settings.ai_enabled:
+            return
+
+        # Управление триггерами из чата (добавить/удалить/править) — раньше списка,
+        # чтобы фраза "добавь триггер" не перехватывалась "какие триггеры".
+        action = parse_trigger_manage(text)
+        if action:
+            if isinstance(action, TriggerAdd):
+                rule_id = store.add_custom_rule(
+                    message.chat.id,
+                    action.word,
+                    action.response,
+                    once_per_day=action.once_per_day,
+                    added_by_user_id=uid,
+                    added_by_username=message.from_user.username,
+                    match=action.match,
+                )
+                await reply_formatted(
+                    message,
+                    "✅ **Триггер добавлен**\n\n"
+                    f"🎯 **Слово**: `{action.word}`\n\n"
+                    f"💬 **Ответ**: **{action.response}**\n\n"
+                    f"🧷 **ID**: `{rule_id}`",
+                )
+                return
+            if isinstance(action, TriggerDelete):
+                removed = store.delete_custom_by_indices(
+                    message.chat.id, [i - 1 for i in action.indices_1based]
+                )
+                if removed:
+                    await reply_formatted(
+                        message,
+                        "🗑️ **Триггеры удалены**\n\n"
+                        f"🔢 Кол-во: **{removed}**",
+                    )
+                else:
+                    await reply_formatted(
+                        message,
+                        "🗑️ Не нашёл такие номера.\n\n"
+                        "🧷 Спроси **«какие триггеры»** и удали по номеру.",
+                    )
+                return
+            if isinstance(action, TriggerUpdate):
+                ok = store.update_custom_rule(
+                    message.chat.id,
+                    action.index_1based - 1,
+                    word=action.word,
+                    response=action.response,
+                    match=action.match,
+                )
+                if ok:
+                    await reply_formatted(
+                        message,
+                        "✏️ **Триггер обновлён**\n\n"
+                        f"🔢 Номер: **{action.index_1based}**",
+                    )
+                else:
+                    await reply_formatted(
+                        message,
+                        "✏️ Не нашёл такой номер.\n\n"
+                        "🧷 Спроси **«какие триггеры»** и выбери номер.",
+                    )
+                return
+
+        # Достать текст из документа — текстом (reply на файл ИЛИ файл с подписью)
+        doc_msg = None
+        if message.reply_to_message and message.reply_to_message.document:
+            doc_msg = message.reply_to_message
+        elif message.document:
+            doc_msg = message
+
+        if doc_msg and doc_msg.document:
+            low = text.lower()
+            wants_text = any(
+                x in low
+                for x in (
+                    "достань текст",
+                    "вытащи текст",
+                    "достать текст",
+                    "извлеки текст",
+                    "вытяни текст",
+                    "прочитай документ",
+                    "прочитай файл",
+                    "текст из документа",
+                    "текст из файла",
+                    "расшифруй текст",
+                    "расшифровать текст",
+                    "распознай текст",
+                    "распознать текст",
+                    "покажи текст",
+                    "покажи содержимое",
+                )
+            )
+            if wants_text:
+                doc = doc_msg.document
+                buf = io.BytesIO()
+                await bot.download(doc.file_id, destination=buf)
+                data = buf.getvalue()
+
+                name = (doc.file_name or "").lower()
+                extracted = ""
+                kind = ""
+                if name.endswith(".pdf") or (doc.mime_type or "").lower().endswith("pdf"):
+                    kind = "PDF"
+                    extracted = extract_pdf_text(data)
+                elif name.endswith(".docx"):
+                    kind = "DOCX"
+                    extracted = extract_docx_text(data)
+                elif name.endswith(".xlsx"):
+                    kind = "XLSX"
+                    extracted = extract_xlsx_preview(data)
+                elif name.endswith(".txt") or (doc.mime_type or "").lower().startswith("text/"):
+                    kind = "TXT"
+                    extracted = extract_plain_text(data)
+
+                if not kind:
+                    await reply_formatted(
+                        message,
+                        "📎 Понимаю **PDF/DOCX/XLSX/TXT**.\n\n"
+                        "🧷 Пришли файл с подписью **«Свин, достань текст из файла»** "
+                        "или ответь реплаем на файл.",
+                    )
+                    return
+
+                if not extracted:
+                    await reply_formatted(
+                        message,
+                        f"📎 **{kind}** пустой или текст не извлёкся.\n\n"
+                        "Если это сканы — нужна OCR.",
+                    )
+                    return
+
+                cleaned = _redact_secrets(extracted).strip()
+                # XLSX уже форматируется построчно — сохраняем переносы строк.
+                snippet = cleaned if kind == "XLSX" else cleaned.replace("\n", " ")
+                if len(snippet) > 2000:
+                    snippet = snippet[:2000] + "…"
+                await reply_formatted(
+                    message,
+                    f"📎 **{kind} → текст**\n\n🧾 {snippet}",
+                )
+                return
+
+        if is_trigger_list_question(text):
+            reply = store.triggers_list_markdown(message.chat.id)
+            logger.info(
+                "trigger_list chat=%s reply_chars=%s",
+                message.chat.id,
+                len(reply),
+            )
+            await reply_formatted(message, reply)
+            return
+
+        if is_capabilities_question(text):
+            await reply_formatted(message, capabilities_markdown())
+            return
+
+        if settings.web_search_enabled:
+            web_reply = await try_web_search_reply(message)
+            if web_reply:
+                await reply_photo_then_text(
+                    message, web_reply.text, web_reply.photo_bytes
+                )
+                return
+
+        if settings.ai_enabled:
+            if is_chat_examples_request(text):
+                reply = await chat_examples_markdown(message.chat.id)
+                logger.info("chat_examples chat=%s", message.chat.id)
+                await reply_formatted(message, reply)
+                return
+
+            tone_reply = await try_personality_or_roster(message)
+            if tone_reply:
+                await reply_formatted(message, tone_reply)
+                return
+
+            if is_who_in_chat_question(text):
+                reply = await who_in_chat_reply(message.chat.id)
+                if reply:
+                    await reply_formatted(message, reply)
+                    return
+
+            user_log = await user_messages_markdown(message.chat.id, text)
+            if user_log:
+                await reply_formatted(message, user_log)
+                return
+
+            if settings.games_enabled:
+                routed = await route_intent(text)
+                if routed["is_game_action"] and routed["game_id"] != "none":
+                    data = await execute_game_action(
+                        chat_id=message.chat.id,
+                        telegram_user_id=uid,
+                        username=message.from_user.username,
+                        game_id=routed["game_id"],
+                        action_type=routed["action_type"],
+                        payload=routed["payload"],
+                    )
+                    resp = render_game_response(routed["game_id"], routed["action_type"], data)
+                    await reply_formatted(message, resp)
+                    return
+
+            if not ai_quota.can_ask(uid):
+                await message.reply(ai_quota.limit_exceeded_message())
+                return
+
+            prompt, system = await svin_prompt_with_memory(message.chat.id, text)
+            answer = await gpt.reply(prompt, system=system)
+            ai_quota.record(uid)
+            await reply_formatted(message, answer)
+        else:
+            # AI выключен — отвечаем заглушкой
+            await reply_formatted(
+                message,
+                "🐷 ИИ-режим выключен. Могу скачать видео по ссылке Instagram.",
+            )
+    except Exception as e:
+        logger.error("svin_ai error: %s", e, exc_info=True)
+        await reply_formatted(message, yandex_error_message())
+
+```
+
+---
+
+## 6. Full Source: downloader.py
+
+```python
+"""Обратная совместимость."""
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from instagram_download import (
+    TELEGRAM_MAX_BYTES,
+    download_instagram_video,
+    init_instagram_downloader,
+    remove_file,
+)
+from instagram_urls import clean_instagram_url, extract_instagram_url, is_instagram_media_url
+
+
+async def download_to_temp_mp4(url: str) -> Path:
+    paths, _ = await download_instagram_video(url)
+    return paths[0]
+
+
+def cleanup_paths(*paths: Path) -> None:
+    for p in paths:
+        remove_file(p)
+
+```
+
+---
+
+## 7. Send Logic: watch_feeder.py (photo/video/carousel)
+
+```python
+# ── Post videos ──
+
+async def _post_single(bot, chat_ids: list[int], item: dict) -> bool:
+    """Download reel and send as video/photo carousel. Skip silently if download fails."""
+    from instagram_download import (
+        download_instagram_video, remove_files,
+        DOWNLOAD_TOTAL_TIMEOUT_SEC, _download_semaphore,
+        TELEGRAM_MAX_BYTES, is_photo_file,
+    )
+    from aiogram.types import FSInputFile, InputMediaPhoto
+
+    sc = item["shortcode"]
+    link = f"https://www.instagram.com/reel/{sc}/"
+    file_paths: list | None = None
+
+    try:
+        logger.info("watch_feed: downloading %s", sc)
+        async with _download_semaphore:
+            file_paths, _ = await asyncio.wait_for(
+                download_instagram_video(link),
+                timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
+            )
+
+        total_size = sum(p.stat().st_size for p in file_paths)
+        if total_size > TELEGRAM_MAX_BYTES:
+            logger.warning("watch_feed: %s too large", sc)
+            remove_files(file_paths)
+            return False
+    except Exception as exc:
+        logger.warning("watch_feed: download failed %s: %s", sc, exc)
+        remove_files(file_paths)
+        return False
+
+    sent = False
+    # Carousel: несколько фото → media group
+    if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+        for cid in chat_ids:
+            try:
+                media = [InputMediaPhoto(media=FSInputFile(p)) for p in file_paths[:10]]
+                await bot.send_media_group(chat_id=cid, media=media)
+                sent = True
+            except Exception as exc:
+                logger.warning("watch_feed: media_group to %s failed: %s", cid, exc)
+    else:
+        file_path = file_paths[0]
+        photo = is_photo_file(file_path)
+        for cid in chat_ids:
+            try:
+                if photo:
+                    await bot.send_photo(
+                        chat_id=cid,
+                        photo=FSInputFile(file_path),
+                    )
+                else:
+                    await bot.send_video(
+                        chat_id=cid,
+                        video=FSInputFile(file_path),
+                        supports_streaming=True,
+                    )
+                sent = True
+            except Exception as exc:
+                logger.warning("watch_feed: send to %s failed: %s", cid, exc)
+
+    remove_files(file_paths)
+    return sent
+
+```
+
+---
+
+## 8. Data Flow
+
+```
+download_instagram_video(url) -> (list[Path], caption)
+    |-- _is_likely_photo_url? -> photo chain (oEmbed -> embed -> page)
+    |-- _download_via_private_api     <- instagrapi + aiohttp CDN
+    |-- _download_ytdlp_fast          <- yt-dlp -g -> aiohttp
+    |-- _download_ytdlp_fallback      <- yt-dlp -o file
+    |-- _download_photo_via_embed     <- aiohttp + BeautifulSoup
+    |-- _download_photo_via_page      <- aiohttp + regex
+    |-- _download_instagram_video_once <- instagrapi (last resort)
+```
+
+## 9. Telegram Send Flow
+
+```python
+paths, caption = await download_instagram_video(url)
+if len(paths) > 1 and all(is_photo_file(p) for p in paths):
+    await message.answer_media_group([InputMediaPhoto(FSInputFile(p)) for p in paths[:10]])
+elif is_photo_file(paths[0]):
+    await message.answer_photo(FSInputFile(paths[0]), caption=caption)
+else:
+    await message.answer_video(FSInputFile(paths[0]), caption=caption)
+remove_files(paths)
+```
+
+## 10. Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `aiohttp` + `aiohttp-socks` | Async HTTP + SOCKS5 |
+| `yt-dlp` | CLI video extractor |
+| `instagrapi` | Instagram Private API |
+| `beautifulsoup4` | HTML parsing |
+| `aiogram` | Telegram bot |
