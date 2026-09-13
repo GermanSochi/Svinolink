@@ -15,24 +15,9 @@ from config import settings
 from deps import gpt, store
 from chat_examples import chat_examples_markdown
 
-# ── Рандомные подписи к видео/фото (1-2 слова) ──
-_IG_PHRASES = (
-    "❤️ Спасибо",
-    "🐷 Круто",
-    "🔥 Лайк",
-    "💪 Топ",
-    "🎯 Огонь",
-    "🐷 Зацените",
-    "✨ Респект",
-    "🤙 Уважуха",
-    "💎 Шедевр",
-    "🎬 Кино",
-    "😎 База",
-    "🐷 Ням",
-    "🚀 Вау",
-    "👀 Глянь",
-    "🐷 Хрю",
-)
+# ── Рандомные подписи к видео/фото ──
+# Два слова по отдельности, чаще без слова — это юмор бота
+_IG_PHRASES = (None, None, None, None, "Донаты", "Приветствуются")
 from chat_user_log import user_messages_markdown
 from telegram_format import reply_formatted, reply_photo_then_text
 from chat_queries import is_chat_examples_request
@@ -280,8 +265,9 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                 try:
                     import random as _rnd
                     phrase = _rnd.choice(_IG_PHRASES)
+                    text = f"{phrase}\nhttps://clck.ru/3UaRGo" if phrase else "https://clck.ru/3UaRGo"
                     await message.answer(
-                        f"{phrase}\nhttps://clck.ru/3UaRGo",
+                        text,
                         reply_to_message_id=message.message_id,
                     )
                 except Exception as donate_err:
