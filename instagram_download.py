@@ -754,13 +754,15 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                 headers={"User-Agent": "Mozilla/5.0"},
                 proxies=PROXIES,
             )
+            logger.info("oEmbed status=%s for %s", oe_resp.status_code, shortcode)
             if oe_resp.status_code == 200:
                 oe_data = oe_resp.json()
                 thumbnail = oe_data.get("thumbnail_url", "")
                 if thumbnail and thumbnail.startswith("http"):
                     image_url = thumbnail
-        except Exception:
-            pass
+                    logger.info("oEmbed thumbnail_url found: %s...", thumbnail[:80])
+        except Exception as oe_exc:
+            logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
 
         # 2) Fallback: og:image из embed-страницы
         if not image_url:
@@ -772,6 +774,7 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
                 proxies=PROXIES,
             )
+            logger.info("embed page status=%s for %s", resp.status_code, shortcode)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             og_img = soup.find("meta", attrs={"property": "og:image"})
@@ -779,13 +782,15 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                 og_val = og_img.get("content", "").strip()
                 if og_val and og_val.startswith("http"):
                     image_url = og_val
+                    logger.info("embed og:image found: %s...", og_val[:80])
 
         if not image_url:
-            logger.info("embed/oembed: no image for %s", shortcode)
+            logger.warning("embed/oembed: NO image found for %s — oEmbed + embed both failed", shortcode)
             return None
 
         # Скачиваем фото
         dest = _dest_path_image()
+        logger.info("downloading image from %s to %s", image_url[:80], dest)
         img_resp = requests.get(
             image_url,
             stream=True,
@@ -793,6 +798,7 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
             headers={"User-Agent": "Mozilla/5.0"},
             proxies=PROXIES,
         )
+        logger.info("image download status=%s content-type=%s", img_resp.status_code, img_resp.headers.get("content-type"))
         img_resp.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in img_resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
@@ -888,7 +894,9 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
                 return paths, caption
         except Exception as exc:
             logger.warning("embed photo failed for /p/ URL: %s", exc)
-        # embed не справился — пробуем yt-dlp ниже (может это видео в /p/)
+        # oEmbed + embed не справились — НЕ идём в yt-dlp (он не качает фото),
+        # сразу поднимаем ошибку, чтобы handler мог ретраить или показать ошибку
+        raise RuntimeError("Не удалось скачать фото с Instagram (oEmbed + embed не дали результат)")
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
