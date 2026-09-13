@@ -683,22 +683,18 @@ async def _download_ytdlp_fallback(url: str) -> Path:
 
 
 async def _ytdlp_download_thumbnail(url: str) -> Path | None:
-    """Скачивает thumbnail/фото из поста через yt-dlp (--write-thumbnail).
+    """Извлекает фото из Instagram поста через yt-dlp --dump-json.
 
-    Для фото-постов Instagram yt-dlp может извлечь thumbnail.
+    Для фото-постов yt-dlp не может скачать, но может извлечь метаданные.
     Работает через proxy если настроен.
     """
-    dest = _dest_path_image()
     cmd = [
         "yt-dlp",
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
         "--no-cache-dir",
-        "--write-thumbnail",
-        "--skip-download",
-        "--convert-thumbnails", "jpg",
-        "-o", str(dest.with_suffix(".%(ext)s")),
+        "-j",  # dump JSON metadata
         url,
     ]
     if PROXY_ENABLED:
@@ -707,24 +703,87 @@ async def _ytdlp_download_thumbnail(url: str) -> Path | None:
     if cookies_path.is_file():
         cmd.insert(1, "--cookies")
         cmd.insert(2, str(cookies_path))
-    logger.info("ytdlp-thumb: running for %s", url)
+    logger.info("ytdlp-json: extracting metadata for %s", url)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    stderr_text = stderr.decode(errors="ignore")
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
     if proc.returncode != 0:
-        raise RuntimeError(f"yt-dlp thumb failed: {stderr_text[:200]}")
-    # Найти скачанный файл (yt-dlp может добавить расширение)
-    candidates = list(dest.parent.glob(f"{dest.stem}*"))
-    if not candidates:
-        raise RuntimeError("yt-dlp thumb: файл не создан")
-    result = candidates[0]
-    if result.stat().st_size < 1024:
-        result.unlink(missing_ok=True)
+        raise RuntimeError(f"yt-dlp json failed: {stderr.decode(errors='ignore')[:200]}")
+
+    try:
+        info = json.loads(stdout.decode(errors="ignore"))
+    except (json.JSONDecodeError, ValueError):
+        raise RuntimeError("yt-dlp json: invalid output")
+
+    # Ищем URL изображения в метаданных
+    img_url = info.get("thumbnail") or info.get("display_url")
+    if not img_url:
+        # Для карусели берём первый элемент
+        entries = info.get("entries", [])
+        if entries:
+            img_url = entries[0].get("thumbnail") or entries[0].get("display_url")
+    if not img_url:
+        raise RuntimeError("yt-dlp json: no image URL in metadata")
+
+    # Скачиваем изображение
+    img_url = _strip_cdn_params(img_url)
+    dest = _dest_path_image()
+    async with _aiohttp_session() as _s:
+        async with _s.get(img_url) as dl:
+            dl.raise_for_status()
+            with open(dest, "wb") as f:
+                async for chunk in dl.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
+                    f.write(chunk)
+
+    if dest.stat().st_size < 1024:
+        dest.unlink(missing_ok=True)
         return None
-    check_file_size(result, source_url=url)
-    logger.info("ytdlp-thumb OK %s -> %s (%s bytes)", url, result, result.stat().st_size)
-    return result
+    check_file_size(dest, source_url=url)
+    logger.info("ytdlp-json OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+    return dest
+
+
+async def _download_oembed_thumbnail(url: str, cookies: dict | None = None) -> Path | None:
+    """Прямой вызов oEmbed API для получения thumbnail фото.
+
+    Последний fallback — thumbnail может быть небольшого размера,
+    но лучше чем ничего.
+    """
+    shortcode = _extract_shortcode(url)
+    if not shortcode:
+        return None
+
+    oembed_url = f"https://api.instagram.com/oembed/?url=https://www.instagram.com/p/{shortcode}/"
+    logger.info("oembed-direct: fetching for %s", shortcode)
+    async with _aiohttp_session() as _s:
+        async with _s.get(oembed_url, cookies=cookies) as resp:
+            logger.info("oembed-direct: status=%s for %s", resp.status, shortcode)
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"oEmbed {resp.status}: {body[:100]}")
+            data = await resp.json()
+
+    thumbnail = data.get("thumbnail_url", "")
+    if not thumbnail or not thumbnail.startswith("http"):
+        raise RuntimeError("oEmbed: no thumbnail_url")
+
+    # Скачиваем thumbnail (с query-параметрами — они нужны для CDN)
+    logger.info("oembed-direct: downloading %s", thumbnail[:100])
+    dest = _dest_path_image()
+    async with _aiohttp_session() as _s:
+        async with _s.get(thumbnail, cookies=cookies) as dl:
+            logger.info("oembed-direct: image status=%s", dl.status)
+            dl.raise_for_status()
+            with open(dest, "wb") as f:
+                async for chunk in dl.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
+                    f.write(chunk)
+
+    if dest.stat().st_size < 1024:
+        dest.unlink(missing_ok=True)
+        return None
+    check_file_size(dest, source_url=url)
+    logger.info("oembed-direct OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
+    return dest
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -842,6 +901,7 @@ async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tu
                 shortcode, "ON" if PROXY_ENABLED else "OFF", "YES" if cookies else "NO")
     try:
         image_url: str | None = None
+        orig_image_url: str | None = None  # до _strip_cdn_params
         embed_html: str | None = None
 
         # 1) Fetch embed page (with retry on rate-limit)
@@ -883,6 +943,7 @@ async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tu
                             thumbnail = oe_data.get("thumbnail_url", "")
                             logger.info("oEmbed response: thumbnail_url=%s", thumbnail[:120] if thumbnail else "EMPTY")
                             if thumbnail and thumbnail.startswith("http"):
+                                orig_image_url = thumbnail
                                 image_url = _strip_cdn_params(thumbnail)
                                 logger.info("oEmbed thumbnail_url found: %s", thumbnail[:120])
                         else:
@@ -900,8 +961,9 @@ async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tu
             if og_img:
                 og_val = og_img.get("content", "").strip()
                 if og_val and og_val.startswith("http"):
+                    orig_image_url = og_val
                     image_url = _strip_cdn_params(og_val)
-                    logger.info("embed og:image found: %s...", og_val[:80])
+                    logger.info("embed og:image found: %s", og_val[:100])
 
             # Strategy B: largest <img> in embed (not tiny avatars)
             if not image_url:
@@ -915,24 +977,37 @@ async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tu
                         continue
                     # cdninstagram images are the actual post content
                     if "cdninstagram" in src or "fbcdn" in src:
+                        orig_image_url = src
                         image_url = _strip_cdn_params(src)
-                        logger.info("embed <img> cdninstagram found: %s...", src[:80])
+                        logger.info("embed <img> cdninstagram found: %s", src[:100])
                         break
 
         if not image_url:
             logger.warning("embed/oembed: NO image found for %s", shortcode)
             return None
 
-        # Скачиваем фото
+        # Скачиваем фото (пробуем stripped URL, если не получится — оригинальный)
         dest = _dest_path_image()
         logger.info("downloading image from %s to %s", image_url[:80], dest)
         async with _aiohttp_session() as _s:
             async with _s.get(image_url, cookies=cookies) as img_resp:
-                logger.info("image download status=%s content-type=%s", img_resp.status, img_resp.headers.get("content-type"))
-                img_resp.raise_for_status()
-                with open(dest, "wb") as f:
-                    async for chunk in img_resp.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
-                        f.write(chunk)
+                logger.info("image download status=%s content-type=%s size-header=%s",
+                            img_resp.status, img_resp.headers.get("content-type"),
+                            img_resp.headers.get("content-length"))
+                if img_resp.status >= 400 and orig_image_url and image_url != orig_image_url:
+                    # CDN отклонил stripped URL — пробуем оригинальный с query-параметрами
+                    logger.warning("stripped CDN URL failed (%s), trying original: %s", img_resp.status, orig_image_url[:80])
+                    async with _s.get(orig_image_url, cookies=cookies) as img2:
+                        logger.info("original URL status=%s", img2.status)
+                        img2.raise_for_status()
+                        with open(dest, "wb") as f:
+                            async for chunk in img2.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
+                                f.write(chunk)
+                else:
+                    img_resp.raise_for_status()
+                    with open(dest, "wb") as f:
+                        async for chunk in img_resp.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
+                            f.write(chunk)
 
         if dest.stat().st_size < 1024:
             dest.unlink(missing_ok=True)
@@ -1043,9 +1118,8 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
     # Путь 1.5: Для /p/ ссылок — oEmbed фото (без yt-dlp, быстрее и надёжнее)
     photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
-        # Загружаем cookies один раз для embed/page запросов
-        _ig_session = _load_ig_session()
-        _ig_cookies = _insta_cookies_to_aio(_ig_session) if _ig_session else {}
+        # Загружаем cookies для embed/page запросов
+        _ig_cookies = _load_cookies_dict() or None
 
         try:
             result = await _download_photo_via_embed(clean, cookies=_ig_cookies)
@@ -1074,17 +1148,17 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
             photo_errors.append(f"page→{exc}")
             logger.warning("page photo failed for /p/ URL: %s", exc)
 
-        # embed/page не справились — пробуем yt-dlp thumbnail (для фото-постов)
-        logger.info("photo methods failed for %s (%s), trying yt-dlp...", clean, "; ".join(photo_errors))
+        # embed/page не справились — пробуем oEmbed напрямую (последний шанс)
+        logger.info("embed+page failed for %s (%s), trying direct oEmbed...", clean, "; ".join(photo_errors))
         try:
-            path = await _ytdlp_download_thumbnail(clean)
+            path = await _download_oembed_thumbnail(clean, cookies=_ig_cookies)
             if path:
                 ms = int((time.monotonic() - t0) * 1000)
-                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="ytdlp-thumb", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="oembed-thumb", size=path.stat().st_size, elapsed_ms=ms, ts=time.time()))
                 return [path], ""
         except Exception as exc:
-            photo_errors.append(f"ytdlp-thumb→{exc}")
-            logger.warning("ytdlp-photo failed: %s", exc)
+            photo_errors.append(f"oembed→{exc}")
+            logger.warning("oembed direct failed: %s", exc)
 
         # Все фото-методы исчерпаны
         logger.error("ALL photo methods failed for %s: %s", clean, "; ".join(photo_errors))
