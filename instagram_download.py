@@ -350,9 +350,7 @@ def init_instagram_downloader() -> None:
 
 
 def _get_client():
-    if _client is None:
-        return _build_client()
-    return _client
+    return _build_client()  # _build_client has internal lock + None-check
 
 
 def _dest_path() -> Path:
@@ -1205,6 +1203,7 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
         logger.warning("private-api failed: %s", exc)
 
     # Путь 1.5: instagrapi photo_download (тот же клиент, что скачивает видео)
+    photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
         try:
             result = await _download_photo_via_instagrapi(clean)
@@ -1214,10 +1213,10 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
                 bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
                 return paths, caption
         except Exception as exc:
+            photo_errors.append(f"instagrapi-photo→{exc}")
             logger.warning("instagrapi-photo failed: %s", exc)
 
     # Путь 1.7: Для /p/ ссылок — embed/page/oEmbed (HTML parsing)
-    photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
         # Загружаем cookies для embed/page запросов
         _ig_cookies = _load_cookies_dict() or None
@@ -1261,9 +1260,9 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
             photo_errors.append(f"oembed→{exc}")
             logger.warning("oembed direct failed: %s", exc)
 
-        # Все фото-методы исчерпаны
-        logger.error("ALL photo methods failed for %s: %s", clean, "; ".join(photo_errors))
-        raise RuntimeError(f"Не удалось скачать фото с Instagram ({'; '.join(photo_errors)})")
+        logger.info("photo methods exhausted for %s (%s), trying video methods...", clean, "; ".join(photo_errors))
+
+    # ─── VIDEO PATHS (также для /p/ — пост может быть видео!) ───
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
@@ -1284,16 +1283,17 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
 
-    # Путь 3.5: Embed photo fallback (если все yt-dlp не справились — возможно фото)
-    try:
-        result = await _download_photo_via_embed(clean)
-        if result:
-            paths, caption = result
-            ms = int((time.monotonic() - t0) * 1000)
-            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
-            return paths, caption
-    except Exception as exc:
-        logger.warning("embed-photo fallback failed: %s", exc)
+    # Путь 3.5: Embed photo fallback (только если ещё не пробовали в Path 1.7)
+    if not photo_errors:
+        try:
+            result = await _download_photo_via_embed(clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            logger.warning("embed-photo fallback failed: %s", exc)
 
     # Путь 4: instagrapi — последний fallback
     from instagrapi.exceptions import ClientError
@@ -1334,6 +1334,8 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
 
     if last_exc is not None:
         raise _runtime_error_for(last_exc)
+    if photo_errors:
+        raise RuntimeError(f"❌ Не удалось скачать ({'; '.join(photo_errors)})")
     raise RuntimeError("❌ Не удалось скачать видео с Instagram")
 
 
