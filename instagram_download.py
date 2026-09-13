@@ -744,9 +744,10 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
 
     embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
     try:
+        image_url: str | None = None
+
         # 1) oEmbed API — самый надёжный способ получить фото без авторизации
         oembed_url = f"https://api.instagram.com/oembed/?url=https://www.instagram.com/p/{shortcode}/"
-        image_url: str | None = None
         try:
             oe_resp = requests.get(
                 oembed_url,
@@ -764,25 +765,40 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         except Exception as oe_exc:
             logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
 
-        # 2) Fallback: og:image из embed-страницы
+        # 2) Fallback: og:image из embed-страницы (с retry при rate-limit)
         if not image_url:
             from bs4 import BeautifulSoup
 
-            resp = requests.get(
-                embed_url,
-                timeout=10,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-                proxies=PROXIES,
-            )
-            logger.info("embed page status=%s for %s", resp.status_code, shortcode)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            og_img = soup.find("meta", attrs={"property": "og:image"})
-            if og_img:
-                og_val = og_img.get("content", "").strip()
-                if og_val and og_val.startswith("http"):
-                    image_url = og_val
-                    logger.info("embed og:image found: %s...", og_val[:80])
+            for _embed_attempt in range(3):
+                try:
+                    resp = requests.get(
+                        embed_url,
+                        timeout=10,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                        proxies=PROXIES,
+                    )
+                    logger.info("embed page status=%s for %s (attempt %s)", resp.status_code, shortcode, _embed_attempt + 1)
+                    if resp.status_code == 429:
+                        logger.warning("embed rate-limited (429), waiting 3s...")
+                        import time as _t
+                        _t.sleep(3)
+                        continue
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    og_img = soup.find("meta", attrs={"property": "og:image"})
+                    if og_img:
+                        og_val = og_img.get("content", "").strip()
+                        if og_val and og_val.startswith("http"):
+                            image_url = og_val
+                            logger.info("embed og:image found: %s...", og_val[:80])
+                    break  # успех (или просто нет og:image) — не ретраим
+                except requests.exceptions.HTTPError:
+                    break  # не 429 — не ретраим
+                except Exception as embed_exc:
+                    logger.warning("embed attempt %s failed: %s", _embed_attempt + 1, embed_exc)
+                    if _embed_attempt < 2:
+                        import time as _t
+                        _t.sleep(2)
 
         if not image_url:
             logger.warning("embed/oembed: NO image found for %s — oEmbed + embed both failed", shortcode)
