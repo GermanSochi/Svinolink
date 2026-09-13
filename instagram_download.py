@@ -920,27 +920,31 @@ async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | N
             raise RuntimeError("not a photo post")
 
         paths: list[Path] = []
-        if media.media_type == 8:
-            # Album/carousel — получаем детали каждого элемента
-            items = cl.media_info_v1(media_pk)
-            # media_info_v1 возвращает тот же объект; resources не всегда заполнен
-            # Пробуем получить carousel через children
-            try:
-                children = cl.media_info_v1(media_pk)
-                carousel = getattr(children, "resources", None) or []
-            except Exception:
-                carousel = []
-            if carousel:
-                for child in carousel:
-                    if child.media_type == 1 and child.thumbnail_url:
-                        p = cl.photo_download_by_url(child.thumbnail_url, folder=folder)
-                        paths.append(p)
-            if not paths and media.thumbnail_url:
-                p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
-                paths.append(p)
+
+        # Для альбомов (media_type==8) thumbnail_url ОТСУТСТВУЕТ — берём из resources
+        if media.resources:
+            for res in media.resources:
+                if res.media_type == 1 and res.thumbnail_url:
+                    p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
+                    paths.append(p)
         elif media.thumbnail_url:
+            # Одиночное фото (media_type==1) — thumbnail_url = largest candidate
             p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
             paths.append(p)
+        else:
+            # Fallback: пробуем media_info_v1 напрямую
+            try:
+                raw = cl.media_info_v1(media_pk)
+                if hasattr(raw, "resources") and raw.resources:
+                    for res in raw.resources:
+                        if res.media_type == 1 and res.thumbnail_url:
+                            p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
+                            paths.append(p)
+                elif hasattr(raw, "thumbnail_url") and raw.thumbnail_url:
+                    p = cl.photo_download_by_url(raw.thumbnail_url, folder=folder)
+                    paths.append(p)
+            except Exception as v1_exc:
+                logger.warning("instagrapi media_info_v1 fallback failed: %s", v1_exc)
 
         if not paths:
             raise RuntimeError("instagrapi: no photo URL found")
@@ -953,6 +957,7 @@ async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | N
             os.rename(str(p), str(dest))
             check_file_size(dest, source_url=url)
             result.append(dest)
+        logger.info("instagrapi-photo OK %s -> %d images (%s bytes total)", url, len(result), sum(d.stat().st_size for d in result))
         return result, caption
 
     return await asyncio.to_thread(_sync)
