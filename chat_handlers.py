@@ -189,11 +189,15 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
             # ── Carousel: несколько фото → send_media_group ──
             if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+                # Генерируем рандомную фразу-донат для подписи
+                import random as _rnd
+                _donate_phrase = _rnd.choice(_IG_PHRASES)
+                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
                 media = []
                 for i, p in enumerate(file_paths[:10]):  # Telegram max 10
                     kw: dict = {"media": FSInputFile(p)}
-                    if i == 0 and caption.strip():
-                        kw["caption"] = caption
+                    if i == 0:
+                        kw["caption"] = _donate_caption
                     media.append(InputMediaPhoto(**kw))
                 for attempt in range(2):
                     try:
@@ -214,16 +218,22 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             else:
                 file_path = file_paths[0]
                 photo = is_photo_file(file_path)
+                # Генерируем рандомную фразу-донат для подписи
+                import random as _rnd
+                _donate_phrase = _rnd.choice(_IG_PHRASES)
+                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
                 for attempt in range(2):
                     try:
                         if photo:
                             await message.answer_photo(
                                 photo=FSInputFile(file_path),
+                                caption=_donate_caption,
                                 reply_to_message_id=message.message_id,
                             )
                         else:
                             await message.answer_video(
                                 video=FSInputFile(file_path),
+                                caption=_donate_caption,
                                 reply_to_message_id=message.message_id,
                                 supports_streaming=True,
                             )
@@ -259,19 +269,6 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                     )
                 except Exception as btn_err:
                     logger.warning("caption button failed (non-fatal): %s", btn_err)
-
-            # ── Рандомная подпись-донат (всегда нефатально) ──
-            if sent_ok:
-                try:
-                    import random as _rnd
-                    phrase = _rnd.choice(_IG_PHRASES)
-                    text = f"{phrase}\nhttps://clck.ru/3UaRGo" if phrase else "https://clck.ru/3UaRGo"
-                    await message.answer(
-                        text,
-                        reply_to_message_id=message.message_id,
-                    )
-                except Exception as donate_err:
-                    logger.warning("donate message failed (non-fatal): %s", donate_err)
 
             # Успех — выходим
             last_error = None

@@ -755,24 +755,40 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Ищем изображения в embed — основное фото поста
-        img_tags = soup.find_all("img")
-        image_urls: list[str] = []
-        for img in img_tags:
-            src = img.get("src", "")
-            # Фильтруем: только CDN Instagram, пропускаем иконки/аватары
-            if ("cdninstagram" in src or "fbcdn" in src) and "150x150" not in src and "s150x150" not in src:
-                if src not in image_urls:
-                    image_urls.append(src)
+        image_url: str | None = None
 
-        if not image_urls:
-            logger.info("embed: no images found for %s", shortcode)
+        # 1) og:image — самый надёжный: именно фото поста, не аватарка
+        og_img = soup.find("meta", attrs={"property": "og:image"})
+        if og_img:
+            image_url = og_img.get("content", "").strip() or None
+
+        # 2) Fallback: ищем по img, исключая аватарки
+        if not image_url:
+            _AVATAR_MARKERS = ("s150x150", "150x150", "profilepic", "Avatar")
+            for img in soup.find_all("img"):
+                src = img.get("src", "")
+                if not src or not src.startswith("http"):
+                    continue
+                src_lower = src.lower()
+                if any(m.lower() in src_lower for m in _AVATAR_MARKERS):
+                    continue
+                parent = img.parent
+                if parent and parent.get("class"):
+                    parent_cls = " ".join(parent.get("class", [])).lower()
+                    if "avatar" in parent_cls or "profile" in parent_cls:
+                        continue
+                # Берём первое подходящее — обычно и есть пост
+                image_url = src
+                break
+
+        if not image_url:
+            logger.info("embed: no image found for %s", shortcode)
             return None
 
-        # Скачиваем первое (основное) изображение
+        # Скачиваем изображение
         dest = _dest_path_image()
         img_resp = requests.get(
-            image_urls[0],
+            image_url,
             stream=True,
             timeout=15,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -811,6 +827,35 @@ def _is_likely_photo_url(url: str) -> bool:
     return "/p/" in url and "/reel/" not in url
 
 
+def _embed_is_video(url: str) -> bool | None:
+    """
+    Fetch embed page, detect if it's a video post.
+    Returns True=video, False=photo, None=uncertain.
+    """
+    shortcode = _extract_shortcode(url)
+    if not shortcode:
+        return None
+    try:
+        embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
+        resp = requests.get(
+            embed_url,
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            proxies=PROXIES,
+        )
+        html = resp.text.lower()
+        # Видео-маркеры в embed
+        if any(k in html for k in ("<video", "video_url", "videoplayer", "reel", "type=\"video")):
+            return True
+        # Явный фото-маркер: og:image есть, видео-маркеров нет
+        og_match = html.find('property="og:image"')
+        if og_match != -1:
+            return False
+        return None
+    except Exception:
+        return None
+
+
 def download_instagram_video(url: str) -> tuple[list[Path], str]:
     """
     Скачивание Reel: private API (быстрый) → yt-dlp fast → yt-dlp → instagrapi.
@@ -839,19 +884,22 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Путь 1.5: Photo embed fallback для /p/ ссылок (без авторизации, ~2-4с)
+    # Путь 1.5: Для /p/ ссылок — определяем тип контента через embed
     if _is_likely_photo_url(clean):
-        try:
-            result = _download_photo_via_embed(clean)
-            if result:
-                paths, caption = result
-                ms = int((time.monotonic() - t0) * 1000)
-                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
-                return paths, caption
-        except Exception as exc:
-            logger.warning("embed photo failed: %s", exc)
-        # Для фото НЕ пробуем yt-dlp — он не умеет скачивать фото
-        raise RuntimeError("❌ Не удалось скачать фото с Instagram")
+        content_type = _embed_is_video(clean)
+        if content_type is False:
+            # Явно фото → пробуем embed photo download
+            try:
+                result = _download_photo_via_embed(clean)
+                if result:
+                    paths, caption = result
+                    ms = int((time.monotonic() - t0) * 1000)
+                    bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                    return paths, caption
+            except Exception as exc:
+                logger.warning("embed photo failed: %s", exc)
+            raise RuntimeError("❌ Не удалось скачать фото с Instagram")
+        # content_type is True (video) or None (uncertain) → идём в yt-dlp ниже
 
     # Путь 2: yt-dlp — извлечение прямой ссылки (~1-3с)
     try:
@@ -871,6 +919,17 @@ def download_instagram_video(url: str) -> tuple[list[Path], str]:
         return [path], ""
     except Exception as exc:
         logger.warning("ytdlp-fallback failed: %s", exc)
+
+    # Путь 3.5: Embed photo fallback (если все yt-dlp не справились — возможно фото)
+    try:
+        result = _download_photo_via_embed(clean)
+        if result:
+            paths, caption = result
+            ms = int((time.monotonic() - t0) * 1000)
+            bot_stats.record_download(DownloadStat(url=clean, ok=True, method="embed-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+            return paths, caption
+    except Exception as exc:
+        logger.warning("embed-photo fallback failed: %s", exc)
 
     # Путь 4: instagrapi — последний fallback
     from instagrapi.exceptions import ClientError
