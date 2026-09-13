@@ -755,55 +755,64 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        image_url: str | None = None
+        _AVATAR_MARKERS = ("s150x150", "150x150", "profilepic", "avatar")
 
-        # 1) og:image — самый надёжный: именно фото поста, не аватарка
+        # Собираем ВСЕ изображения поста (для карусели будет несколько)
+        image_urls: list[str] = []
+
+        # og:image — основное фото (всегда первое)
         og_img = soup.find("meta", attrs={"property": "og:image"})
         if og_img:
-            image_url = og_img.get("content", "").strip() or None
+            og_url = og_img.get("content", "").strip()
+            if og_url and og_url.startswith("http"):
+                image_urls.append(og_url)
 
-        # 2) Fallback: ищем по img, исключая аватарки
-        if not image_url:
-            _AVATAR_MARKERS = ("s150x150", "150x150", "profilepic", "Avatar")
-            for img in soup.find_all("img"):
-                src = img.get("src", "")
-                if not src or not src.startswith("http"):
+        # Все img — ищем дополнительные фото карусели
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            if not src or not src.startswith("http"):
+                continue
+            src_lower = src.lower()
+            # Пропускаем аватарки и иконки
+            if any(m in src_lower for m in _AVATAR_MARKERS):
+                continue
+            parent = img.parent
+            if parent and parent.get("class"):
+                parent_cls = " ".join(parent.get("class", [])).lower()
+                if "avatar" in parent_cls or "profile" in parent_cls:
                     continue
-                src_lower = src.lower()
-                if any(m.lower() in src_lower for m in _AVATAR_MARKERS):
-                    continue
-                parent = img.parent
-                if parent and parent.get("class"):
-                    parent_cls = " ".join(parent.get("class", [])).lower()
-                    if "avatar" in parent_cls or "profile" in parent_cls:
-                        continue
-                # Берём первое подходящее — обычно и есть пост
-                image_url = src
-                break
+            if src not in image_urls:
+                image_urls.append(src)
 
-        if not image_url:
+        if not image_urls:
             logger.info("embed: no image found for %s", shortcode)
             return None
 
-        # Скачиваем изображение
-        dest = _dest_path_image()
-        img_resp = requests.get(
-            image_url,
-            stream=True,
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0"},
-            proxies=PROXIES,
-        )
-        img_resp.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in img_resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                f.write(chunk)
+        # Скачиваем все изображения
+        paths: list[Path] = []
+        for img_url in image_urls[:10]:  # Telegram max 10
+            dest = _dest_path_image()
+            img_resp = requests.get(
+                img_url,
+                stream=True,
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"},
+                proxies=PROXIES,
+            )
+            img_resp.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in img_resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                    f.write(chunk)
 
-        if dest.stat().st_size < 1024:
-            dest.unlink(missing_ok=True)
+            if dest.stat().st_size < 1024:
+                dest.unlink(missing_ok=True)
+                continue
+            check_file_size(dest, source_url=url)
+            paths.append(dest)
+
+        if not paths:
+            logger.info("embed: all images too small for %s", shortcode)
             return None
-
-        check_file_size(dest, source_url=url)
 
         # Пытаемся достать caption из embed
         caption = ""
@@ -811,8 +820,8 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         if meta_desc:
             caption = meta_desc.get("content", "").strip()
 
-        logger.info("embed photo OK %s -> %s (%s bytes)", url, dest, dest.stat().st_size)
-        return [dest], caption
+        logger.info("embed photo OK %s -> %d images", url, len(paths))
+        return paths, caption
 
     except Exception as exc:
         logger.info("embed photo fallback failed for %s: %s", shortcode, exc)
