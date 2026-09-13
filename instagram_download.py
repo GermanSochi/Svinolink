@@ -883,7 +883,11 @@ def check_file_size(path: Path, *, source_url: str = "") -> None:
 
 
 async def _download_instagram_video_once(clean: str) -> Path:
+    t_lock = time.monotonic()
     async with _get_instagrapi_lock():
+        lock_wait_ms = int((time.monotonic() - t_lock) * 1000)
+        if lock_wait_ms > 100:
+            logger.info("instagrapi-video lock-wait %dms for %s", lock_wait_ms, clean)
         def _sync() -> Path:
             cl = _get_client()
             if cl.user_id is None and _cookies_file().is_file():
@@ -916,7 +920,11 @@ async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | N
     Использует media_info_v1 + photo_download_by_url. Работает в thread pool,
     чтобы не блокировать async event loop.
     """
+    t_lock = time.monotonic()
     async with _get_instagrapi_lock():
+        lock_wait_ms = int((time.monotonic() - t_lock) * 1000)
+        if lock_wait_ms > 100:
+            logger.info("instagrapi-photo lock-wait %dms for %s", lock_wait_ms, url)
         def _sync() -> tuple[list[Path], str]:
             cl = _get_client()
             if cl.user_id is None and _cookies_file().is_file():
@@ -1202,21 +1210,10 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Путь 1.5: instagrapi photo_download (тот же клиент, что скачивает видео)
+    # Путь 1.5: Для /p/ ссылок — embed/page/oEmbed (HTML parsing)
+    # ⚠️ ДОЛЖЕН идти ДО instagrapi, т.к. instagrapi держит asyncio.Lock
+    #    и блокирует параллельные скачивания других ссылок.
     photo_errors: list[str] = []
-    if _is_likely_photo_url(clean):
-        try:
-            result = await _download_photo_via_instagrapi(clean)
-            if result:
-                paths, caption = result
-                ms = int((time.monotonic() - t0) * 1000)
-                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
-                return paths, caption
-        except Exception as exc:
-            photo_errors.append(f"instagrapi-photo→{exc}")
-            logger.warning("instagrapi-photo failed: %s", exc)
-
-    # Путь 1.7: Для /p/ ссылок — embed/page/oEmbed (HTML parsing)
     if _is_likely_photo_url(clean):
         # Загружаем cookies для embed/page запросов
         _ig_cookies = _load_cookies_dict() or None
@@ -1295,7 +1292,24 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
         except Exception as exc:
             logger.warning("embed-photo fallback failed: %s", exc)
 
-    # Путь 4: instagrapi — последний fallback
+    # Путь 3.7: instagrapi photo — после ВСЕХ безоплочных методов,
+    # т.к. держит asyncio.Lock и блокирует параллельные запросы.
+    if _is_likely_photo_url(clean):
+        try:
+            t_lock = time.monotonic()
+            result = await _download_photo_via_instagrapi(clean)
+            lock_ms = int((time.monotonic() - t_lock) * 1000)
+            logger.info("instagrapi-photo lock-held %dms for %s", lock_ms, clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            photo_errors.append(f"instagrapi-photo→{exc}")
+            logger.warning("instagrapi-photo failed: %s", exc)
+
+    # Путь 4: instagrapi video — последний fallback
     from instagrapi.exceptions import ClientError
 
     last_exc: Exception | None = None
