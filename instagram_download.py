@@ -93,6 +93,14 @@ _ADMIN_COOKIES_ALERT = (
 
 _client = None
 _last_admin_alert_ts: float = 0  # чтобы не спамить
+_instagrapi_lock: asyncio.Lock | None = None  # защита от конкурентного доступа
+
+
+def _get_instagrapi_lock() -> asyncio.Lock:
+    global _instagrapi_lock
+    if _instagrapi_lock is None:
+        _instagrapi_lock = asyncio.Lock()
+    return _instagrapi_lock
 
 
 async def _notify_admin_cookies_expired(bot) -> None:
@@ -877,28 +885,31 @@ def check_file_size(path: Path, *, source_url: str = "") -> None:
 
 
 async def _download_instagram_video_once(clean: str) -> Path:
-    def _sync() -> Path:
-        cl = _get_client()
-    if cl.user_id is None and _cookies_file().is_file():
-        raise RuntimeError(COOKIES_EXPIRED_MSG)
+    async with _get_instagrapi_lock():
+        def _sync() -> Path:
+            cl = _get_client()
+            if cl.user_id is None and _cookies_file().is_file():
+                raise RuntimeError(COOKIES_EXPIRED_MSG)
 
-    media_pk = cl.media_pk_from_url(clean)
-    folder = _downloads_dir()
+            media_pk = cl.media_pk_from_url(clean)
+            folder = _downloads_dir()
 
-    try:
-        raw_path = cl.clip_download(media_pk, folder=folder)
-    except Exception as exc:
-        if _is_timeout_error(exc):
-            raise
-        logger.info("clip_download failed, trying video_download: %s", exc)
-        raw_path = cl.video_download(media_pk, folder=folder)
+            try:
+                raw_path = cl.clip_download(media_pk, folder=folder)
+            except Exception as exc:
+                if _is_timeout_error(exc):
+                    raise
+                logger.info("clip_download failed, trying video_download: %s", exc)
+                raw_path = cl.video_download(media_pk, folder=folder)
 
-    # Переименовываем вместо копирования — экономим время и диск
-    dest = _dest_path()
-    os.rename(str(raw_path), str(dest))
-    check_file_size(dest, source_url=clean)
-    logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
-    return dest
+            # Переименовываем вместо копирования — экономим время и диск
+            dest = _dest_path()
+            os.rename(str(raw_path), str(dest))
+            check_file_size(dest, source_url=clean)
+            logger.info("instagrapi OK %s -> %s (%s bytes)", clean, dest, dest.stat().st_size)
+            return dest
+
+        return await asyncio.to_thread(_sync)
 
 
 async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | None:
@@ -907,60 +918,61 @@ async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | N
     Использует media_info_v1 + photo_download_by_url. Работает в thread pool,
     чтобы не блокировать async event loop.
     """
-    def _sync() -> tuple[list[Path], str]:
-        cl = _get_client()
-        if cl.user_id is None and _cookies_file().is_file():
-            raise RuntimeError(COOKIES_EXPIRED_MSG)
-        media_pk = cl.media_pk_from_url(url)
-        media = cl.media_info(media_pk)
-        folder = _downloads_dir()
+    async with _get_instagrapi_lock():
+        def _sync() -> tuple[list[Path], str]:
+            cl = _get_client()
+            if cl.user_id is None and _cookies_file().is_file():
+                raise RuntimeError(COOKIES_EXPIRED_MSG)
+            media_pk = cl.media_pk_from_url(url)
+            media = cl.media_info(media_pk)
+            folder = _downloads_dir()
 
-        # media_type: 1=photo, 2=video, 8=album
-        if media.media_type == 2:
-            raise RuntimeError("not a photo post")
+            # media_type: 1=photo, 2=video, 8=album
+            if media.media_type == 2:
+                raise RuntimeError("not a photo post")
 
-        paths: list[Path] = []
+            paths: list[Path] = []
 
-        # Для альбомов (media_type==8) thumbnail_url ОТСУТСТВУЕТ — берём из resources
-        if media.resources:
-            for res in media.resources:
-                if res.media_type == 1 and res.thumbnail_url:
-                    p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
-                    paths.append(p)
-        elif media.thumbnail_url:
-            # Одиночное фото (media_type==1) — thumbnail_url = largest candidate
-            p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
-            paths.append(p)
-        else:
-            # Fallback: пробуем media_info_v1 напрямую
-            try:
-                raw = cl.media_info_v1(media_pk)
-                if hasattr(raw, "resources") and raw.resources:
-                    for res in raw.resources:
-                        if res.media_type == 1 and res.thumbnail_url:
-                            p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
-                            paths.append(p)
-                elif hasattr(raw, "thumbnail_url") and raw.thumbnail_url:
-                    p = cl.photo_download_by_url(raw.thumbnail_url, folder=folder)
-                    paths.append(p)
-            except Exception as v1_exc:
-                logger.warning("instagrapi media_info_v1 fallback failed: %s", v1_exc)
+            # Для альбомов (media_type==8) thumbnail_url ОТСУТСТВУЕТ — берём из resources
+            if media.resources:
+                for res in media.resources:
+                    if res.media_type == 1 and res.thumbnail_url:
+                        p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
+                        paths.append(p)
+            elif media.thumbnail_url:
+                # Одиночное фото (media_type==1) — thumbnail_url = largest candidate
+                p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
+                paths.append(p)
+            else:
+                # Fallback: пробуем media_info_v1 напрямую
+                try:
+                    raw = cl.media_info_v1(media_pk)
+                    if hasattr(raw, "resources") and raw.resources:
+                        for res in raw.resources:
+                            if res.media_type == 1 and res.thumbnail_url:
+                                p = cl.photo_download_by_url(res.thumbnail_url, folder=folder)
+                                paths.append(p)
+                    elif hasattr(raw, "thumbnail_url") and raw.thumbnail_url:
+                        p = cl.photo_download_by_url(raw.thumbnail_url, folder=folder)
+                        paths.append(p)
+                except Exception as v1_exc:
+                    logger.warning("instagrapi media_info_v1 fallback failed: %s", v1_exc)
 
-        if not paths:
-            raise RuntimeError("instagrapi: no photo URL found")
+            if not paths:
+                raise RuntimeError("instagrapi: no photo URL found")
 
-        caption = media.caption_text or ""
-        # Перемещаем в стандартные имена
-        result: list[Path] = []
-        for p in paths:
-            dest = _dest_path_image()
-            os.rename(str(p), str(dest))
-            check_file_size(dest, source_url=url)
-            result.append(dest)
-        logger.info("instagrapi-photo OK %s -> %d images (%s bytes total)", url, len(result), sum(d.stat().st_size for d in result))
-        return result, caption
+            caption = media.caption_text or ""
+            # Перемещаем в стандартные имена
+            result: list[Path] = []
+            for p in paths:
+                dest = _dest_path_image()
+                os.rename(str(p), str(dest))
+                check_file_size(dest, source_url=url)
+                result.append(dest)
+            logger.info("instagrapi-photo OK %s -> %d images (%s bytes total)", url, len(result), sum(d.stat().st_size for d in result))
+            return result, caption
 
-    return await asyncio.to_thread(_sync)
+        return await asyncio.to_thread(_sync)
 
 
 async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tuple[list[Path], str] | None:
