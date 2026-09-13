@@ -33,11 +33,20 @@ All aiohttp requests in embed/page functions now get `cookies=` parameter.
 5. ❌ Error with details
 ```
 
-## Last Known Render Logs (12:11, be3129d deploy — BEFORE NameError fix):
+## Last Known Render Logs (before cccb263)
 ```
 embed→None; page→None; ytdlp-thumb→No video formats found
 ```
-After be4e0f1 deploy: NOT YET TESTED. The NameError fix means cookies WILL now be passed.
+After cccb263: NOT YET TESTED. Added instagrapi fallback + detailed photo logging.
+
+## What cccb263 Added
+1. **instagrapi photo_download** (Path 1.5): Uses same client/session as video download
+   - `cl.media_info(media_pk)` → gets `thumbnail_url`
+   - `cl.photo_download_by_url(url)` → plain `requests.get` (no IG headers)
+   - Runs in `asyncio.to_thread` to not block event loop
+2. **Detailed logging in private API photo path**:
+   - `private-api photo[N] download status=XXX` — CDN response status
+   - `private API: no image URL for X (media_type=X, keys=[...])` — what API returned
 
 ## Possible Remaining Issues (check Render logs from be4e0f1)
 
@@ -67,6 +76,7 @@ oEmbed thumbnail might be too small. `_strip_cdn_params` might fix size or break
 | `_download_photo_via_embed()` | ✅ | Parse embed page HTML for images |
 | `_download_photo_via_page()` | ✅ | Parse post page HTML for CDN URLs |
 | `_download_oembed_thumbnail()` | ✅ NEW | Direct oEmbed API → thumbnail download |
+| `_download_photo_via_instagrapi()` | ✅ NEW | instagrapi photo_download via thread pool |
 | `_strip_cdn_params()` | ✅ | Remove size limits from CDN URLs |
 | `_extract_shortcode()` | ✅ | Extract shortcode from IG URL |
 | `_aiohttp_session()` | ✅ | aiohttp session with proxy if enabled |
@@ -79,12 +89,25 @@ oEmbed thumbnail might be too small. `_strip_cdn_params` might fix size or break
 
 ## Git Commits (this session, newest first)
 ```
+cccb263 feat: add instagrapi photo_download fallback + detailed photo API logging
 be4e0f1 fix: use existing _load_cookies_dict + add oembed-direct fallback
 838548e fix: pass cookies to embed/page requests + strip CDN path params
 be3129d fix: add yt-dlp thumbnail for photo posts + detailed error logging
 d98f45a fix: add yt-dlp fallback for photo URLs + better error messages
 eb607dd fix: strip CDN query params for full-size Instagram images
 97b91f3 refactor: replace requests with async aiohttp + UA rotation
+```
+
+## Current Photo Download Chain (cccb263)
+```
+1. Private API    → /api/v1/media/{id}/info/ (aiohttp, custom headers + cookies)
+                   → image_versions2.candidates[0].url → download
+2. instagrapi     → cl.media_info() + cl.photo_download_by_url() (requests, no IG headers)
+                   → NEW: uses same client that downloads videos
+3. embed page     → /p/SHORTCODE/embed/ + og:image + <img> parsing (+cookies)
+4. page HTML      → /p/SHORTCODE/ + regex cdninstagram/fbcdn URLs (+cookies)
+5. oEmbed direct  → api.instagram.com/oembed/ + thumbnail download (+cookies)
+6. ❌ Error with details
 ```
 
 ## Next Steps
