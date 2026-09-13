@@ -745,63 +745,88 @@ def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
     embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
     try:
         image_url: str | None = None
+        embed_html: str | None = None
 
-        # 1) oEmbed API — самый надёжный способ получить фото без авторизации
-        oembed_url = f"https://api.instagram.com/oembed/?url=https://www.instagram.com/p/{shortcode}/"
-        try:
-            oe_resp = requests.get(
-                oembed_url,
-                timeout=8,
-                headers={"User-Agent": "Mozilla/5.0"},
-                proxies=PROXIES,
-            )
-            logger.info("oEmbed status=%s for %s", oe_resp.status_code, shortcode)
-            if oe_resp.status_code == 200:
-                oe_data = oe_resp.json()
-                thumbnail = oe_data.get("thumbnail_url", "")
-                if thumbnail and thumbnail.startswith("http"):
-                    image_url = thumbnail
-                    logger.info("oEmbed thumbnail_url found: %s...", thumbnail[:80])
-        except Exception as oe_exc:
-            logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
+        # 1) Fetch embed page (with retry on rate-limit)
+        from bs4 import BeautifulSoup
 
-        # 2) Fallback: og:image из embed-страницы (с retry при rate-limit)
-        if not image_url:
-            from bs4 import BeautifulSoup
+        for _embed_attempt in range(3):
+            try:
+                logger.info("embed: fetching %s (attempt %s)...", embed_url[:60], _embed_attempt + 1)
+                resp = requests.get(
+                    embed_url,
+                    timeout=10,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                    proxies=PROXIES,
+                )
+                logger.info("embed page status=%s for %s (attempt %s), len=%s",
+                           resp.status_code, shortcode, _embed_attempt + 1, len(resp.text))
+                if resp.status_code == 429:
+                    logger.warning("embed rate-limited (429), waiting 3s...")
+                    import time as _t
+                    _t.sleep(3)
+                    continue
+                resp.raise_for_status()
+                embed_html = resp.text
+                break
+            except Exception as embed_exc:
+                logger.warning("embed attempt %s failed: %s", _embed_attempt + 1, embed_exc)
+                if _embed_attempt < 2:
+                    import time as _t
+                    _t.sleep(2)
 
-            for _embed_attempt in range(3):
-                try:
-                    resp = requests.get(
-                        embed_url,
-                        timeout=10,
-                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-                        proxies=PROXIES,
-                    )
-                    logger.info("embed page status=%s for %s (attempt %s)", resp.status_code, shortcode, _embed_attempt + 1)
-                    if resp.status_code == 429:
-                        logger.warning("embed rate-limited (429), waiting 3s...")
-                        import time as _t
-                        _t.sleep(3)
+        # 2) Try oEmbed API (parallel strategy)
+        if not embed_html:
+            logger.info("embed page failed, trying oEmbed API for %s", shortcode)
+            oembed_url = f"https://api.instagram.com/oembed/?url=https://www.instagram.com/p/{shortcode}/"
+            try:
+                oe_resp = requests.get(
+                    oembed_url,
+                    timeout=8,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    proxies=PROXIES,
+                )
+                logger.info("oEmbed status=%s for %s", oe_resp.status_code, shortcode)
+                if oe_resp.status_code == 200:
+                    oe_data = oe_resp.json()
+                    thumbnail = oe_data.get("thumbnail_url", "")
+                    logger.info("oEmbed response: thumbnail_url=%s", thumbnail[:80] if thumbnail else "EMPTY")
+                    if thumbnail and thumbnail.startswith("http"):
+                        image_url = thumbnail
+                        logger.info("oEmbed thumbnail_url found: %s...", thumbnail[:80])
+            except Exception as oe_exc:
+                logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
+
+        # 3) Parse embed HTML for image
+        if embed_html:
+            soup = BeautifulSoup(embed_html, "html.parser")
+
+            # Strategy A: og:image meta tag
+            og_img = soup.find("meta", attrs={"property": "og:image"})
+            if og_img:
+                og_val = og_img.get("content", "").strip()
+                if og_val and og_val.startswith("http"):
+                    image_url = og_val
+                    logger.info("embed og:image found: %s...", og_val[:80])
+
+            # Strategy B: largest <img> in embed (not tiny avatars)
+            if not image_url:
+                for img in soup.find_all("img"):
+                    src = img.get("src", "")
+                    if not src.startswith("http"):
                         continue
-                    resp.raise_for_status()
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    og_img = soup.find("meta", attrs={"property": "og:image"})
-                    if og_img:
-                        og_val = og_img.get("content", "").strip()
-                        if og_val and og_val.startswith("http"):
-                            image_url = og_val
-                            logger.info("embed og:image found: %s...", og_val[:80])
-                    break  # успех (или просто нет og:image) — не ретраим
-                except requests.exceptions.HTTPError:
-                    break  # не 429 — не ретраим
-                except Exception as embed_exc:
-                    logger.warning("embed attempt %s failed: %s", _embed_attempt + 1, embed_exc)
-                    if _embed_attempt < 2:
-                        import time as _t
-                        _t.sleep(2)
+                    # Skip avatars, icons, small images
+                    width = img.get("width", "")
+                    if width and width.isdigit() and int(width) < 100:
+                        continue
+                    # cdninstagram images are the actual post content
+                    if "cdninstagram" in src or "fbcdn" in src:
+                        image_url = src
+                        logger.info("embed <img> cdninstagram found: %s...", src[:80])
+                        break
 
         if not image_url:
-            logger.warning("embed/oembed: NO image found for %s — oEmbed + embed both failed", shortcode)
+            logger.warning("embed/oembed: NO image found for %s", shortcode)
             return None
 
         # Скачиваем фото
