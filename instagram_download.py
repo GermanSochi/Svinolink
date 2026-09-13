@@ -527,18 +527,33 @@ async def _download_via_private_api(url: str) -> tuple[list[Path], str] | None:
                 if candidates:
                     image_urls.append(candidates[0]["url"])
             if not image_urls:
-                logger.info("private API: no video or image URL for %s", shortcode)
+                media_type = media.get("media_type", "?")
+                product_type = media.get("product_type", "?")
+                has_carousel = bool(carousel)
+                logger.warning(
+                    "private API: no image URL for %s (media_type=%s product_type=%s carousel=%s, "
+                    "has_video_versions=%s, has_image_versions2=%s, keys=%s)",
+                    shortcode, media_type, product_type, has_carousel,
+                    bool(media.get("video_versions")),
+                    bool(media.get("image_versions2")),
+                    list(media.keys())[:15],
+                )
                 return None
             # Скачиваем ВСЕ изображения
             dests: list[Path] = []
-            for img_url in image_urls:
+            for idx, img_url in enumerate(image_urls):
                 dest = _dest_path_image()
-                async with _aiohttp_session() as _s:
-                    async with _s.get(img_url, headers=headers, cookies=cookies) as dl:
-                        dl.raise_for_status()
-                        with open(dest, "wb") as f:
-                            async for chunk in dl.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
-                                f.write(chunk)
+                try:
+                    async with _aiohttp_session() as _s:
+                        async with _s.get(img_url, headers=headers, cookies=cookies) as dl:
+                            logger.info("private-api photo[%d] download status=%s url=%s", idx, dl.status, img_url[:80])
+                            dl.raise_for_status()
+                            with open(dest, "wb") as f:
+                                async for chunk in dl.content.iter_chunked(DOWNLOAD_CHUNK_SIZE):
+                                    f.write(chunk)
+                except Exception as dl_exc:
+                    logger.warning("private-api photo[%d] download failed for %s: %s", idx, shortcode, dl_exc)
+                    continue
                 if dest.stat().st_size < 1024:
                     dest.unlink(missing_ok=True)
                     continue
@@ -886,6 +901,63 @@ async def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
+async def _download_photo_via_instagrapi(url: str) -> tuple[list[Path], str] | None:
+    """Скачивание фото через instagrapi.photo_download (тот же клиент, что и для видео).
+
+    Использует media_info_v1 + photo_download_by_url. Работает в thread pool,
+    чтобы не блокировать async event loop.
+    """
+    def _sync() -> tuple[list[Path], str]:
+        cl = _get_client()
+        if cl.user_id is None and _cookies_file().is_file():
+            raise RuntimeError(COOKIES_EXPIRED_MSG)
+        media_pk = cl.media_pk_from_url(url)
+        media = cl.media_info(media_pk)
+        folder = _downloads_dir()
+
+        # media_type: 1=photo, 2=video, 8=album
+        if media.media_type == 2:
+            raise RuntimeError("not a photo post")
+
+        paths: list[Path] = []
+        if media.media_type == 8:
+            # Album/carousel — получаем детали каждого элемента
+            items = cl.media_info_v1(media_pk)
+            # media_info_v1 возвращает тот же объект; resources не всегда заполнен
+            # Пробуем получить carousel через children
+            try:
+                children = cl.media_info_v1(media_pk)
+                carousel = getattr(children, "resources", None) or []
+            except Exception:
+                carousel = []
+            if carousel:
+                for child in carousel:
+                    if child.media_type == 1 and child.thumbnail_url:
+                        p = cl.photo_download_by_url(child.thumbnail_url, folder=folder)
+                        paths.append(p)
+            if not paths and media.thumbnail_url:
+                p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
+                paths.append(p)
+        elif media.thumbnail_url:
+            p = cl.photo_download_by_url(media.thumbnail_url, folder=folder)
+            paths.append(p)
+
+        if not paths:
+            raise RuntimeError("instagrapi: no photo URL found")
+
+        caption = media.caption_text or ""
+        # Перемещаем в стандартные имена
+        result: list[Path] = []
+        for p in paths:
+            dest = _dest_path_image()
+            os.rename(str(p), str(dest))
+            check_file_size(dest, source_url=url)
+            result.append(dest)
+        return result, caption
+
+    return await asyncio.to_thread(_sync)
+
+
 async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tuple[list[Path], str] | None:
     """
     Fallback для фото-постов: парсит embed-страницу Instagram.
@@ -1115,7 +1187,19 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
     except Exception as exc:
         logger.warning("private-api failed: %s", exc)
 
-    # Путь 1.5: Для /p/ ссылок — oEmbed фото (без yt-dlp, быстрее и надёжнее)
+    # Путь 1.5: instagrapi photo_download (тот же клиент, что скачивает видео)
+    if _is_likely_photo_url(clean):
+        try:
+            result = await _download_photo_via_instagrapi(clean)
+            if result:
+                paths, caption = result
+                ms = int((time.monotonic() - t0) * 1000)
+                bot_stats.record_download(DownloadStat(url=clean, ok=True, method="instagrapi-photo", size=sum(p.stat().st_size for p in paths), elapsed_ms=ms, ts=time.time()))
+                return paths, caption
+        except Exception as exc:
+            logger.warning("instagrapi-photo failed: %s", exc)
+
+    # Путь 1.7: Для /p/ ссылок — embed/page/oEmbed (HTML parsing)
     photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
         # Загружаем cookies для embed/page запросов
