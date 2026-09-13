@@ -887,7 +887,7 @@ def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
         html = resp.text
 
         # Ищем cdninstagram/fbcdn URL для изображений
-        img_pattern = re.compile(r'https?://[^\s"\'\\]+(?:cdninstagram|fbcdn)\.net[^\s"\'\\]+\.jpg[^\s"\'\\]*')
+        img_pattern = re.compile(r'https?://[^\s"\'<>\\]+(?:cdninstagram\.com|fbcdn\.net)[^\s"\'<>\\]+\.(?:jpg|jpeg|webp)[^\s"\'<>\\]*')
         matches = img_pattern.findall(html)
         if matches:
             # Берём самый длинный URL (обычно самый полный)
