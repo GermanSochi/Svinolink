@@ -373,17 +373,28 @@ def _shortcode_to_media_id(shortcode: str) -> int:
 
 
 def _strip_cdn_params(url: str) -> str:
-    """Убирает query-параметры из CDN URL Instagram для получения полного размера.
+    """Убирает ограничения размера из CDN URL Instagram.
 
     Instagram CDN (scontent.cdninstagram.com, cdninstagram.com, fbcdn.net)
-    ограничивает размер через параметры вроде _nc_cat, _nc_ohc, oh, oe и т.д.
-    Без параметров CDN отдаёт полноразмерное изображение.
+    ограничивает размер через:
+    - Query-параметры (_nc_cat, _nc_ohc, oh, oe, stp и т.д.)
+    - Path-компоненты (/s150x150/, /c0.135.1080.1080/, /e15/ и т.д.)
+    Без ограничений CDN отдаёт полноразмерное изображение.
     """
     from urllib.parse import urlparse
-    if "cdninstagram.com" in url or "fbcdn.net" in url:
-        parsed = urlparse(url)
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    return url
+    import re
+    if "cdninstagram.com" not in url and "fbcdn.net" not in url:
+        return url
+    parsed = urlparse(url)
+    path = parsed.path
+    # Убираем /sNNNxNNN/ (размер)
+    path = re.sub(r'/s\d+x\d+/', '/', path)
+    # Убираем /cNNN.NNN.NNN.NNN/ (crop)
+    path = re.sub(r'/c[\d.]+/', '/', path)
+    # Убираем /eNN/ (enhancement/edge)
+    path = re.sub(r'/e\d+/', '/', path)
+    # Возвращаем БЕЗ query-параметров (убираем _nc_*, stp, oh, oe и т.д.)
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
 def _extract_shortcode(url: str) -> str | None:
@@ -816,7 +827,7 @@ async def _download_instagram_video_once(clean: str) -> Path:
     return dest
 
 
-async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
+async def _download_photo_via_embed(url: str, cookies: dict | None = None) -> tuple[list[Path], str] | None:
     """
     Fallback для фото-постов: парсит embed-страницу Instagram.
     Работает без авторизации (~2-4с).
@@ -827,7 +838,8 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         return None
 
     embed_url = f"https://www.instagram.com/p/{shortcode}/embed/"
-    logger.info("embed: starting photo download for %s, proxy=%s", shortcode, "ON" if PROXY_ENABLED else "OFF")
+    logger.info("embed: starting photo download for %s, proxy=%s, cookies=%s",
+                shortcode, "ON" if PROXY_ENABLED else "OFF", "YES" if cookies else "NO")
     try:
         image_url: str | None = None
         embed_html: str | None = None
@@ -839,7 +851,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
             try:
                 logger.info("embed: fetching %s (attempt %s)...", embed_url[:60], _embed_attempt + 1)
                 async with _aiohttp_session() as _s:
-                    async with _s.get(embed_url) as resp:
+                    async with _s.get(embed_url, cookies=cookies) as resp:
                         logger.info("embed page status=%s for %s (attempt %s)",
                                    resp.status, shortcode, _embed_attempt + 1)
                         if resp.status == 429:
@@ -848,6 +860,10 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
                             continue
                         resp.raise_for_status()
                         embed_html = await resp.text()
+                        logger.info("embed: got %d chars HTML for %s", len(embed_html), shortcode)
+                        # Проверяем что это не login wall
+                        if "login" in embed_html[:500].lower() and len(embed_html) < 2000:
+                            logger.warning("embed: got login wall (%d chars) for %s", len(embed_html), shortcode)
                         break
             except Exception as embed_exc:
                 logger.warning("embed attempt %s failed: %s", _embed_attempt + 1, embed_exc)
@@ -860,15 +876,18 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
             oembed_url = f"https://api.instagram.com/oembed/?url=https://www.instagram.com/p/{shortcode}/"
             try:
                 async with _aiohttp_session() as _s:
-                    async with _s.get(oembed_url) as oe_resp:
+                    async with _s.get(oembed_url, cookies=cookies) as oe_resp:
                         logger.info("oEmbed status=%s for %s", oe_resp.status, shortcode)
                         if oe_resp.status == 200:
                             oe_data = await oe_resp.json()
                             thumbnail = oe_data.get("thumbnail_url", "")
-                            logger.info("oEmbed response: thumbnail_url=%s", thumbnail[:80] if thumbnail else "EMPTY")
+                            logger.info("oEmbed response: thumbnail_url=%s", thumbnail[:120] if thumbnail else "EMPTY")
                             if thumbnail and thumbnail.startswith("http"):
                                 image_url = _strip_cdn_params(thumbnail)
-                                logger.info("oEmbed thumbnail_url found: %s...", thumbnail[:80])
+                                logger.info("oEmbed thumbnail_url found: %s", thumbnail[:120])
+                        else:
+                            oe_body = await oe_resp.text()
+                            logger.warning("oEmbed error %s: %s", oe_resp.status, oe_body[:200])
             except Exception as oe_exc:
                 logger.warning("oEmbed exception for %s: %s", shortcode, oe_exc)
 
@@ -908,7 +927,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         dest = _dest_path_image()
         logger.info("downloading image from %s to %s", image_url[:80], dest)
         async with _aiohttp_session() as _s:
-            async with _s.get(image_url) as img_resp:
+            async with _s.get(image_url, cookies=cookies) as img_resp:
                 logger.info("image download status=%s content-type=%s", img_resp.status, img_resp.headers.get("content-type"))
                 img_resp.raise_for_status()
                 with open(dest, "wb") as f:
@@ -929,7 +948,7 @@ async def _download_photo_via_embed(url: str) -> tuple[list[Path], str] | None:
         return None
 
 
-async def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
+async def _download_photo_via_page(url: str, cookies: dict | None = None) -> tuple[list[Path], str] | None:
     """
     Fallback для фото: парсит JSON из HTML-страницы поста Instagram.
     Работает без авторизации, но может быть нестабильным.
@@ -940,9 +959,9 @@ async def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
 
     page_url = f"https://www.instagram.com/p/{shortcode}/"
     try:
-        logger.info("page: fetching %s for photo extraction", page_url)
+        logger.info("page: fetching %s for photo extraction (cookies=%s)", page_url, "YES" if cookies else "NO")
         async with _aiohttp_session() as _s:
-            async with _s.get(page_url) as resp:
+            async with _s.get(page_url, cookies=cookies) as resp:
                 logger.info("page status=%s for %s", resp.status, shortcode)
                 if resp.status != 200:
                     return None
@@ -961,11 +980,11 @@ async def _download_photo_via_page(url: str) -> tuple[list[Path], str] | None:
             best_url = best_url.replace("\\u0026", "&")
             # Убираем query-параметры CDN для полного размера
             best_url = _strip_cdn_params(best_url)
-            logger.info("page: found cdninstagram image URL: %s...", best_url[:80])
+            logger.info("page: found cdninstagram image URL: %s", best_url[:100])
 
             dest = _dest_path_image()
             async with _aiohttp_session() as _s:
-                async with _s.get(best_url) as img_resp:
+                async with _s.get(best_url, cookies=cookies) as img_resp:
                     logger.info("page image download status=%s", img_resp.status)
                     img_resp.raise_for_status()
                     with open(dest, "wb") as f:
@@ -1024,8 +1043,12 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
     # Путь 1.5: Для /p/ ссылок — oEmbed фото (без yt-dlp, быстрее и надёжнее)
     photo_errors: list[str] = []
     if _is_likely_photo_url(clean):
+        # Загружаем cookies один раз для embed/page запросов
+        _ig_session = _load_ig_session()
+        _ig_cookies = _insta_cookies_to_aio(_ig_session) if _ig_session else {}
+
         try:
-            result = await _download_photo_via_embed(clean)
+            result = await _download_photo_via_embed(clean, cookies=_ig_cookies)
             if result:
                 paths, caption = result
                 ms = int((time.monotonic() - t0) * 1000)
@@ -1039,7 +1062,7 @@ async def download_instagram_video(url: str) -> tuple[list[Path], str]:
 
         # Fallback: прямой парсинг HTML-страницы поста
         try:
-            result = await _download_photo_via_page(clean)
+            result = await _download_photo_via_page(clean, cookies=_ig_cookies)
             if result:
                 paths, caption = result
                 ms = int((time.monotonic() - t0) * 1000)
