@@ -89,6 +89,7 @@ oEmbed thumbnail might be too small. `_strip_cdn_params` might fix size or break
 
 ## Git Commits (this session, newest first)
 ```
+a8d8b07 fix: instagrapi photo — handle albums (media.resources) + fallback to media_info_v1
 cccb263 feat: add instagrapi photo_download fallback + detailed photo API logging
 be4e0f1 fix: use existing _load_cookies_dict + add oembed-direct fallback
 838548e fix: pass cookies to embed/page requests + strip CDN path params
@@ -98,12 +99,13 @@ eb607dd fix: strip CDN query params for full-size Instagram images
 97b91f3 refactor: replace requests with async aiohttp + UA rotation
 ```
 
-## Current Photo Download Chain (cccb263)
+## Current Photo Download Chain (a8d8b07)
 ```
-1. Private API    → /api/v1/media/{id}/info/ (aiohttp, custom headers + cookies)
+1. Private API    → /api/v1/media/{id}/info/ (aiohttp + IG headers + cookies)
                    → image_versions2.candidates[0].url → download
 2. instagrapi     → cl.media_info() + cl.photo_download_by_url() (requests, no IG headers)
-                   → NEW: uses same client that downloads videos
+                   → handles single photos AND albums (via media.resources)
+                   → uses same authenticated client that downloads videos
 3. embed page     → /p/SHORTCODE/embed/ + og:image + <img> parsing (+cookies)
 4. page HTML      → /p/SHORTCODE/ + regex cdninstagram/fbcdn URLs (+cookies)
 5. oEmbed direct  → api.instagram.com/oembed/ + thumbnail download (+cookies)
