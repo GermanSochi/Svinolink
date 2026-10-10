@@ -157,9 +157,8 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         await message.answer("🐷 Не вытащил ссылку из сообщения.")
         return
     if not is_instagram_media_url(clean_url):
-        await message.answer(
-            "🐷 Нужна ссылка на Reel, пост, сторис или актуальное (/reel/, /p/, /stories/, /s/)"
-        )
+        # Молча пропускаем ссылки на аккаунты и прочий не-медиа контент
+        logger.info("IG non-media URL, ignoring: %s", clean_url)
         return
 
     logger.info("IG clean_url=%s", clean_url)
@@ -308,6 +307,12 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             await _notify_admin_cookies_expired(bot)
             # Молча выходим — не спамим пользователя
             return
+        # Молча пропускаем ошибки для /p/ фото и аккаунтов (не спамим пользователя)
+        if "/p/" in clean_url:
+            bot_stats.record_error(f"IG photo fail (silent): {str(last_error)[:100]}")
+            logger.warning("IG photo download failed for %s (silent): %s", clean_url, last_error)
+            return
+
         if isinstance(last_error, RuntimeError) and str(last_error) == "timeout":
             bot_stats.record_error(f"IG timeout {DOWNLOAD_TOTAL_TIMEOUT_SEC}s: {clean_url}")
             await message.answer(instagram_timeout_message())

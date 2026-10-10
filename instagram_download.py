@@ -858,6 +858,12 @@ def _is_block_or_network_error(exc: Exception) -> bool:
     return any(n in msg for n in needles)
 
 
+RENDER_NETWORK_BLOCK_MSG = (
+    "🐷 Instagram **временно блокирует** запросы с сервера.\n\n"
+    "⏳ Попробуй ещё раз через минуту — обычно помогает."
+)
+
+
 def _runtime_error_for(exc: Exception) -> RuntimeError:
     if _is_timeout_error(exc):
         return RuntimeError(
@@ -867,7 +873,8 @@ def _runtime_error_for(exc: Exception) -> RuntimeError:
     if _is_session_error(exc):
         return RuntimeError(COOKIES_EXPIRED_MSG)
     if _cookies_loaded and _is_block_or_network_error(exc):
-        return RuntimeError(COOKIES_EXPIRED_MSG)
+        # Сетевая ошибка ≠ протухшие cookies. Показываем пользователю, не молчим.
+        return RuntimeError(RENDER_NETWORK_BLOCK_MSG)
     if _is_block_or_network_error(exc):
         return RuntimeError(RENDER_IP_BLOCK_MSG)
     return RuntimeError(f"❌ Ошибка instagrapi: {exc}")
