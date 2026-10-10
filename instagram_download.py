@@ -265,6 +265,9 @@ def _build_client():
         password = settings.instagram_password.strip()
         _cookies_loaded = False
 
+        logger.info("instagrapi _build_client: file=%s env=%s",
+                     cookies_path.is_file(), bool(_load_cookies_from_env()))
+
         if cookies_path.is_file():
             try:
                 _load_cookies_into_client(cl, cookies_path)
