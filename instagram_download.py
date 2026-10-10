@@ -91,8 +91,18 @@ _ADMIN_COOKIES_ALERT = (
     "🔧 Обнови `INSTAGRAM_COOKIES_JSON` на Render."
 )
 
+_ADMIN_COOKIES_EXPIRING_SOON = (
+    "⏳ **Instagram cookies скоро протухнут!**\n\n"
+    "Куки `{name}` истекает **{days_left}д** ({date}).\n"
+    "🔧 Обнови `INSTAGRAM_COOKIES_JSON` на Render заранее."
+)
+
+COOKIE_CHECK_INTERVAL_SEC = 6 * 3600  # каждые6 часов
+COOKIE_WARN_DAYS = 3  # предупреждать за3 дня
+
 _client = None
 _last_admin_alert_ts: float = 0  # чтобы не спамить
+_last_cookie_warn_ts: float = 0  # превентивное предупреждение
 _instagrapi_lock: asyncio.Lock | None = None  # защита от конкурентного доступа
 
 
@@ -115,6 +125,122 @@ async def _notify_admin_cookies_expired(bot) -> None:
             await bot.send_message(admin_id, _ADMIN_COOKIES_ALERT, parse_mode="Markdown")
     except Exception as exc:
         logger.warning("Failed to notify admin about expired cookies: %s", exc)
+
+
+def _parse_cookie_expirations() -> list[tuple[str, float]]:
+    """Возвращает [(name, expiry_ts), ...] из cookies (файл или env)."""
+    import re
+    result: list[tuple[str, float]] = []
+
+    # Из файла
+    path = _cookies_file()
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7:
+                try:
+                    exp = float(parts[4])
+                    if exp > 0:
+                        result.append((parts[5], exp))
+                except (ValueError, IndexError):
+                    pass
+        return result
+
+    # Из env — не можем узнать expiry, но проверяем наличие ключевых cookies
+    env = _load_cookies_from_env()
+    if env:
+        # sessionid обычно живет ~90 дней, ds_user_id ~90 дней
+        # Без expiry не можем предупредить заранее
+        pass
+    return result
+
+
+async def _check_cookie_expiration(bot) -> None:
+    """Проверяет сроки годности cookies и предупреждает админа за3 дня."""
+    global _last_cookie_warn_ts
+    import datetime
+
+    now = time.time()
+    if now - _last_cookie_warn_ts < 12 * 3600:  # не чаще раза в12 часов
+        return
+
+    expirations = _parse_cookie_expirations()
+    if not expirations:
+        return
+
+    warn_threshold = COOKIE_WARN_DAYS * 86400
+    for name, exp_ts in expirations:
+        remaining = exp_ts - now
+        if 0 < remaining < warn_threshold:
+            _last_cookie_warn_ts = now
+            days_left = int(remaining /86400)
+            date_str = datetime.datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d")
+            msg = _ADMIN_COOKIES_EXPIRING_SOON.format(
+                name=name, days_left=days_left, date=date_str
+            )
+            try:
+                for admin_id in settings.admin_ids:
+                    await bot.send_message(admin_id, msg, parse_mode="Markdown")
+            except Exception as exc:
+                logger.warning("Failed to notify admin about expiring cookies: %s", exc)
+            break
+
+
+async def cookie_health_loop(bot) -> None:
+    """Фоновая задача: проверяет cookies каждые6 часов."""
+    while True:
+        await asyncio.sleep(COOKIE_CHECK_INTERVAL_SEC)
+        try:
+            await _check_cookie_expiration(bot)
+        except Exception as exc:
+            logger.warning("cookie_health_loop error: %s", exc)
+
+
+async def ig_status_report() -> str:
+    """Возвращает текстовый отчёт о состоянии Instagram для админа."""
+    import datetime
+
+    lines = ["📊 **Instagram Status**\n"]
+
+    # Cookies source
+    path = _cookies_file()
+    env_cookies = _load_cookies_from_env()
+    if path.is_file():
+        lines.append(f"📁 Файл: `{path}` ({path.stat().st_size}б)")
+    elif env_cookies:
+        lines.append("📁 Источник: ENV `INSTAGRAM_COOKIES_JSON`")
+    else:
+        lines.append("📁 Источник: ❌ не найден")
+
+    # Client status
+    lines.append(f"🔑 Клиент: {'✅ готов' if _client and _ready else '❌ не инициализирован'}")
+    lines.append(f"🍪 Cookies loaded: {_cookies_loaded}")
+
+    # Cookie expirations
+    expirations = _parse_cookie_expirations()
+    if expirations:
+        now = time.time()
+        lines.append("\n📅 **Сроки годности cookies:**")
+        for name, exp_ts in sorted(expirations, key=lambda x: x[1]):
+            remaining = exp_ts - now
+            date_str = datetime.datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d")
+            if remaining <0:
+                lines.append(f"  ❌ `{name}` — протух {date_str}")
+            elif remaining <3 *86400:
+                days = int(remaining /86400)
+                lines.append(f"  ⚠️ `{name}` — истекает через {days}д ({date_str})")
+            else:
+                days = int(remaining /86400)
+                lines.append(f"  ✅ `{name}` — {days}д ({date_str})")
+
+    # Paused status
+    if settings.instagram_paused:
+        lines.append("\n⏸️ Instagram на паузе")
+
+    return "\n".join(lines)
 _client_lock = Lock()
 _ready = False
 _cookies_loaded = False

@@ -54,7 +54,8 @@ async def cmd_admin(message: Message) -> None:
     "Панель GERSOCHI\n\n"
     "/admin_stats — статистика\n"
     "/admin_reset USER_ID — сброс ИИ-лимита «свин»\n"
-    "/admin_broadcast текст — только в личку тебе (тест)\n\n"
+    "/admin_broadcast текст — только в личку тебе (тест)\n"
+    "/ig_status — состояние Instagram cookies\n\n"
     "🎭 **Тон в групповом чате** (только админ, прямо в группе):\n"
     "🔹 `Свин уровень юмора 40 процентов`\n"
     "🔹 `Свин уровень токсичности 25 процентов`\n"
@@ -133,3 +134,15 @@ async def cmd_admin_reset(message: Message) -> None:
   uid = int(parts[1])
   reset_user(uid)
   await message.answer(f"Сброшен ИИ-лимит «свин» для user_id {uid}")
+
+
+@router.message(Command("ig_status"), F.chat.type == "private")
+async def cmd_ig_status(message: Message) -> None:
+  if not message.from_user or not is_admin_user(
+    message.from_user.id, message.from_user.username
+  ):
+    return
+  from instagram_download import ig_status_report
+
+  report = await ig_status_report()
+  await message.answer(report, parse_mode="Markdown")
