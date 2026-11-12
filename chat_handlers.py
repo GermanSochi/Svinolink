@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import os
 import re
@@ -18,6 +19,21 @@ from chat_examples import chat_examples_markdown
 # ── Рандомные подписи к видео/фото ──
 # Два слова по отдельности, чаще без слова — это юмор бота
 _IG_PHRASES = (None, None, None, None, "Донаты", "Приветствуются")
+
+# ── Реклама в подписи: ровно 1 месяц (с 12.11.2026 по 12.12.2026 включительно) ──
+_AD_TEXT = "Дима Очень Красивый"
+_AD_UNTIL = datetime.date(2026, 12, 12)
+
+
+def _build_caption() -> str:
+    """Подпись: [фраза] + ссылка на донаты + (до даты окончания) реклама в конце."""
+    import random as _rnd
+
+    phrase = _rnd.choice(_IG_PHRASES)
+    caption = f"{phrase}\nhttps://clck.ru/3UaRGo" if phrase else "https://clck.ru/3UaRGo"
+    if datetime.date.today() <= _AD_UNTIL:
+        caption += f"\n\n{_AD_TEXT}"
+    return caption
 from chat_user_log import user_messages_markdown
 from telegram_format import reply_formatted, reply_photo_then_text
 from chat_queries import is_chat_examples_request
@@ -188,10 +204,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
             # ── Carousel: несколько фото → send_media_group ──
             if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
-                # Генерируем рандомную фразу-донат для подписи
-                import random as _rnd
-                _donate_phrase = _rnd.choice(_IG_PHRASES)
-                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
+                _donate_caption = _build_caption()
                 media = []
                 for i, p in enumerate(file_paths[:10]):  # Telegram max 10
                     kw: dict = {"media": FSInputFile(p)}
@@ -217,10 +230,7 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
             else:
                 file_path = file_paths[0]
                 photo = is_photo_file(file_path)
-                # Генерируем рандомную фразу-донат для подписи
-                import random as _rnd
-                _donate_phrase = _rnd.choice(_IG_PHRASES)
-                _donate_caption = f"{_donate_phrase}\nhttps://clck.ru/3UaRGo" if _donate_phrase else "https://clck.ru/3UaRGo"
+                _donate_caption = _build_caption()
                 for attempt in range(2):
                     try:
                         if photo:
