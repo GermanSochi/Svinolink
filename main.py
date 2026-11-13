@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -98,7 +99,8 @@ async def main() -> None:
     if not settings.bot_token:
         raise RuntimeError("Задай BOT_TOKEN в .env")
 
-    bot = Bot(token=settings.bot_token)
+    # Таймаут 300с: долгая загрузка длинного видео не должна обрываться на 60с (иначе дубли)
+    bot = Bot(token=settings.bot_token, session=AiohttpSession(timeout=300))
     dp = _build_dispatcher()
     me = await bot.get_me()
     logger.info("Bot @%s render=%s webhook_base=%s", me.username, settings.is_render, settings.webhook_base_url or "(empty)")

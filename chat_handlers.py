@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import io
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, StateFilter
@@ -138,6 +139,8 @@ from admin_auth import is_admin_user  # noqa: F401 — re-export для стар
 
 
 _ig_caption_cache: dict[str, str] = {}
+_ig_handled: dict[tuple, float] = {}   # (chat_id, message_id) -> когда взяли в работу
+_ig_inflight: dict[tuple, float] = {}  # (chat_id, url) -> идёт обработка прямо сейчас
 
 
 async def handle_instagram_link(message: Message, bot: Bot) -> None:
@@ -179,88 +182,127 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
 
     logger.info("IG clean_url=%s", clean_url)
 
+    # ── Защита от дублей ──
+    # Одно сообщение и одна ссылка в чате обрабатываются строго один раз:
+    # повторная доставка апдейта / спам одной ссылкой / ретрай не плодят копии.
+    now = time.monotonic()
+    for _d in (_ig_handled, _ig_inflight):
+        for _k in [k for k, t in _d.items() if now - t > 900]:
+            _d.pop(_k, None)
+    guard_key = (message.chat.id, message.message_id)
+    url_key = (message.chat.id, clean_url)
+    if guard_key in _ig_handled or url_key in _ig_inflight:
+        logger.info("IG duplicate ignored chat=%s msg=%s url=%s", message.chat.id, message.message_id, clean_url)
+        return
+    _ig_handled[guard_key] = now
+    _ig_inflight[url_key] = now
+    try:
+        await _ig_process(message, bot, clean_url)
+    finally:
+        _ig_inflight.pop(url_key, None)
+
+
+async def _ig_process(message: Message, bot: Bot, clean_url: str) -> None:
+    from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+    from bot_stats import bot_stats
+    from instagram_download import (
+        DOWNLOAD_TOTAL_TIMEOUT_SEC,
+        _download_semaphore,
+        download_instagram_video,
+        is_photo_file,
+        remove_files,
+    )
+
     MAX_DOWNLOAD_RETRIES = 3
     RETRY_DELAY_SEC = 5
     last_error: Exception | None = None
+    file_paths: list | None = None
+    caption = ""
 
+    # ── Фаза 1: скачивание. Ретраи только здесь: в Telegram ещё ничего не ушло ──
     for download_attempt in range(MAX_DOWNLOAD_RETRIES):
-        file_paths: list | None = None
         try:
-            from instagram_download import _download_semaphore
             async with _download_semaphore:
                 file_paths, caption = await asyncio.wait_for(
                     download_instagram_video(clean_url),
                     timeout=DOWNLOAD_TOTAL_TIMEOUT_SEC,
                 )
+            last_error = None
+            break
+        except asyncio.TimeoutError:
+            logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
+            last_error = RuntimeError("timeout")
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "instagram download attempt %s/%s failed: %s",
+                download_attempt + 1,
+                MAX_DOWNLOAD_RETRIES,
+                e,
+            )
+        if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
+            logger.info("retry %s/%s after %ss", download_attempt + 2, MAX_DOWNLOAD_RETRIES, RETRY_DELAY_SEC)
+            await asyncio.sleep(RETRY_DELAY_SEC)
 
+    # ── Фаза 2: отправка в Telegram. Повторно файл НЕ шлём, если неясно, дошёл ли он ──
+    if file_paths is not None:
+        try:
             total_size = sum(os.path.getsize(p) for p in file_paths)
             if total_size > TELEGRAM_MAX_BYTES:
-                remove_files(file_paths)
-                file_paths = None
                 await message.answer(video_too_heavy_message(clean_url))
                 return
 
-            sent_ok = False  # флаг: успешно ли отправлен контент
-
-            # ── Carousel: несколько фото → send_media_group ──
-            if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+            async def _send() -> None:
                 _donate_caption = _build_caption()
-                media = []
-                for i, p in enumerate(file_paths[:10]):  # Telegram max 10
-                    kw: dict = {"media": FSInputFile(p)}
-                    if i == 0:
-                        kw["caption"] = _donate_caption
-                    media.append(InputMediaPhoto(**kw))
-                for attempt in range(2):
-                    try:
-                        await message.answer_media_group(
-                            media=media,
-                            reply_to_message_id=message.message_id,
-                        )
-                        sent_ok = True
-                        break
-                    except Exception as e:
-                        if "timeout" in str(e).lower() and attempt < 1:
-                            logger.warning("tg media group timeout attempt %s/2: %s", attempt + 1, e)
-                            await asyncio.sleep(2)
-                            continue
-                        raise
+                if len(file_paths) > 1 and all(is_photo_file(p) for p in file_paths):
+                    media = []
+                    for i, p in enumerate(file_paths[:10]):  # Telegram max 10
+                        kw: dict = {"media": FSInputFile(p)}
+                        if i == 0:
+                            kw["caption"] = _donate_caption
+                        media.append(InputMediaPhoto(**kw))
+                    await message.answer_media_group(media=media, reply_to_message_id=message.message_id)
+                elif is_photo_file(file_paths[0]):
+                    await message.answer_photo(
+                        photo=FSInputFile(file_paths[0]),
+                        caption=_donate_caption,
+                        reply_to_message_id=message.message_id,
+                    )
+                else:
+                    await message.answer_video(
+                        video=FSInputFile(file_paths[0]),
+                        caption=_donate_caption,
+                        reply_to_message_id=message.message_id,
+                        supports_streaming=True,
+                    )
 
-            # ── Single file: видео или одно фото ──
-            else:
-                file_path = file_paths[0]
-                photo = is_photo_file(file_path)
-                _donate_caption = _build_caption()
-                for attempt in range(2):
-                    try:
-                        if photo:
-                            await message.answer_photo(
-                                photo=FSInputFile(file_path),
-                                caption=_donate_caption,
-                                reply_to_message_id=message.message_id,
-                            )
-                        else:
-                            await message.answer_video(
-                                video=FSInputFile(file_path),
-                                caption=_donate_caption,
-                                reply_to_message_id=message.message_id,
-                                supports_streaming=True,
-                            )
-                        sent_ok = True
-                        break
-                    except Exception as e:
-                        if "timeout" in str(e).lower() and attempt < 1:
-                            logger.warning(
-                                "telegram upload timeout attempt %s/2: %s",
-                                attempt + 1,
-                                e,
-                            )
-                            await asyncio.sleep(2)
-                            continue
-                        raise
+            sent_ok = False
+            for flood_attempt in range(3):
+                try:
+                    await _send()
+                    sent_ok = True
+                    break
+                except TelegramRetryAfter as e:
+                    # Flood control: Telegram точно НЕ принял файл — можно повторить после паузы
+                    logger.warning("tg flood wait %ss (attempt %s/3)", e.retry_after, flood_attempt + 1)
+                    await asyncio.sleep(e.retry_after + 1)
+                except TelegramNetworkError as e:
+                    # Таймаут/обрыв: файл мог уже дойти. Повтор = дубль, поэтому НЕ повторяем.
+                    logger.error("tg send outcome unknown (no resend) %s: %s", clean_url, e)
+                    bot_stats.record_error(f"IG send unknown (no resend): {str(e)[:80]}")
+                    return
+                except Exception as e:
+                    # Ошибка API (Telegram отверг запрос) — не доставлено; один понятный ответ вместо спама
+                    logger.warning("tg send rejected %s: %s", clean_url, e)
+                    bot_stats.record_error(f"IG send rejected: {str(e)[:100]}")
+                    if "/p/" not in clean_url:
+                        await message.answer(map_instagram_error(e, clean_url))
+                    return
+            if not sent_ok:
+                return
 
             # ── Кнопка «Описание» — отдельным сообщением (всегда нефатально) ──
-            if sent_ok and caption.strip():
+            if caption.strip():
                 try:
                     cache_key = f"{message.chat.id}:{message.message_id}:{clean_url}"
                     _ig_caption_cache[cache_key] = caption
@@ -278,37 +320,14 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
                     )
                 except Exception as btn_err:
                     logger.warning("caption button failed (non-fatal): %s", btn_err)
-
-            # Успех — выходим
-            last_error = None
-            break
-
-        except asyncio.TimeoutError:
-            logger.error("instagram download total timeout (%ss)", DOWNLOAD_TOTAL_TIMEOUT_SEC)
-            last_error = RuntimeError("timeout")
-            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
-                logger.info("retry %s/%s after %ss", download_attempt + 2, MAX_DOWNLOAD_RETRIES, RETRY_DELAY_SEC)
-                await asyncio.sleep(RETRY_DELAY_SEC)
-                continue
-        except Exception as e:
-            last_error = e
-            logger.warning(
-                "instagram download attempt %s/%s failed: %s",
-                download_attempt + 1,
-                MAX_DOWNLOAD_RETRIES,
-                e,
-            )
-            if download_attempt < MAX_DOWNLOAD_RETRIES - 1:
-                await asyncio.sleep(RETRY_DELAY_SEC)
-                continue
+            return
         finally:
-            if file_paths is not None:
-                try:
-                    remove_files(file_paths)
-                except Exception:
-                    pass
+            try:
+                remove_files(file_paths)
+            except Exception:
+                pass
 
-    # Все попытки исчерпаны
+    # ── Все попытки скачивания исчерпаны ──
     if last_error is not None:
         error_text = str(last_error).lower()
         # Уведомляем админа при протухании cookies
@@ -329,7 +348,6 @@ async def handle_instagram_link(message: Message, bot: Bot) -> None:
         else:
             bot_stats.record_error(f"IG error: {str(last_error)[:100]}")
             await message.answer(map_instagram_error(last_error, clean_url))
-
 
 async def handle_ig_text_callback(callback: CallbackQuery) -> None:
     data = callback.data or ""
